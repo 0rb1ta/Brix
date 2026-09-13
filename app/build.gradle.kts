@@ -36,8 +36,15 @@ android {
         applicationId = "app.brix"
         minSdk = 29
         targetSdk = 36
+        // Версия человеческая, без хэша: её видят люди, каталог приложений и
+        // страница релиза. Хэш коммита добавляется только к отладочным
+        // сборкам (см. buildTypes ниже) — там он и нужен, чтобы по HUD было
+        // видно, что именно стоит на телефоне.
+        //
+        // versionCode обязан строго расти от релиза к релизу, иначе обновление
+        // не доедет до тех, кто уже поставил.
         versionCode = 1
-        versionName = "0.1.0-$gitHash"
+        versionName = "0.1.0"
     }
 
     // Restricts which locale-qualified resources actually get packaged into
@@ -72,6 +79,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Хэш коммита только в отладочных сборках: он виден в HUD, и по
+            // нему сразу понятно, что именно стоит на телефоне после полевого
+            // выезда. В релизе такого хвоста быть не должно — там версия
+            // человеческая.
+            versionNameSuffix = "-$gitHash"
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
