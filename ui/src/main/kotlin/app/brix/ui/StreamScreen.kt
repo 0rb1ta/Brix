@@ -868,7 +868,10 @@ private fun ImmersiveStream(
                 // Foreground service first: it owns the wake lock that keeps
                 // the CPU alive if the screen goes off mid-connect.
                 StreamService.start(context)
-                withContext(Dispatchers.IO) { current.start(server.baseUrl) }
+                // connectUrl, а не baseUrl: у RTMP ключ трансляции хранится
+                // отдельным полем и приклеивается к адресу здесь. Профили без
+                // отдельного ключа отдают baseUrl как есть.
+                withContext(Dispatchers.IO) { current.start(server.connectUrl()) }
             }
         }
     }

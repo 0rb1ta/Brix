@@ -2,19 +2,21 @@ package app.brix.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -35,15 +37,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import app.brix.core.AbrAlgorithm
-import app.brix.streaming.EncoderCapabilities
 import app.brix.core.Codec
 import app.brix.core.Ids
 import app.brix.core.ServerProfile
 import app.brix.core.ServerType
 import app.brix.core.StreamProfile
 import app.brix.core.defaultStreamPresets
+import app.brix.streaming.EncoderCapabilities
 
 @Composable
 fun StreamProfileEditScreen(
@@ -353,6 +357,8 @@ fun ServerProfileEditScreen(
 
     var name by rememberSaveable { mutableStateOf(server?.name ?: "") }
     var baseUrl by rememberSaveable { mutableStateOf(server?.baseUrl ?: "") }
+    var streamKey by rememberSaveable { mutableStateOf(server?.streamId ?: "") }
+    var keyVisible by rememberSaveable { mutableStateOf(false) }
     var type by rememberSaveable { mutableStateOf(server?.type ?: ServerType.SRTLA) }
     var enabled by rememberSaveable { mutableStateOf(server?.enabled ?: true) }
     var latency by rememberSaveable { mutableStateOf((server?.latencyMs ?: 2000).toString()) }
@@ -376,6 +382,10 @@ fun ServerProfileEditScreen(
         // как и в редакторе стрим-профилей.
         latencyMs = latency.toIntOrNull() ?: base.latencyMs,
         preferIpv4 = preferIpv4,
+        // Ключ хранится отдельно от адреса и приклеивается при подключении
+        // (ServerProfile.connectUrl). Для не-RTMP поле не показывается, но
+        // значение не стираем: смена типа туда-сюда не должна его терять.
+        streamId = streamKey.trim(),
     )
 
     Scaffold(
@@ -426,6 +436,32 @@ fun ServerProfileEditScreen(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (type == ServerType.RTMP) {
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = streamKey,
+                        onValueChange = { streamKey = it },
+                        label = { Text(stringResource(R.string.field_stream_key)) },
+                        supportingText = { Text(stringResource(R.string.field_stream_key_hint)) },
+                        // Точки по умолчанию: ключ трансляции — это доступ к
+                        // каналу, а настройки стример открывает и в эфире тоже.
+                        visualTransformation = if (keyVisible) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { keyVisible = !keyVisible }) {
+                                Icon(
+                                    imageVector = if (keyVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                    contentDescription = stringResource(R.string.field_stream_key_show),
+                                )
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 if (type == ServerType.SRTLA) {
                     Spacer(Modifier.height(12.dp))
                     BrixToggleRow(

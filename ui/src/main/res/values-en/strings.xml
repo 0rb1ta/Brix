@@ -294,4 +294,7 @@
     <string name="scenes_audio_internal">Device audio</string>
     <string name="scenes_audio_both">Both</string>
     <string name="scenes_audio_hint">Device audio uses the same permission as screen capture. Not every app allows it: games usually do, music services almost never. While donation audio is on it will go silent — both use the same audio source slot.</string>
+    <string name="field_stream_key">Stream key</string>
+    <string name="field_stream_key_hint">Platforms hand it out separately from the URL. Leave empty if the key is already part of the URL.</string>
+    <string name="field_stream_key_show">Show key</string>
 </resources>

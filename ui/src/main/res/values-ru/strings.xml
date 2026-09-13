@@ -294,4 +294,7 @@
     <string name="scenes_audio_internal">Звук телефона</string>
     <string name="scenes_audio_both">Оба</string>
     <string name="scenes_audio_hint">Звук телефона идёт через то же разрешение, что и захват экрана. Разрешает его не всякое приложение: игры обычно да, музыкальные сервисы почти всегда нет. Пока включён звук донатов, он замолчит — оба механизма занимают один слот источника.</string>
+    <string name="field_stream_key">Ключ трансляции</string>
+    <string name="field_stream_key_hint">Площадка выдаёт его отдельно от адреса. Оставьте пустым, если ключ уже вписан в адрес.</string>
+    <string name="field_stream_key_show">Показать ключ</string>
 </resources>
