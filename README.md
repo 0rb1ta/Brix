@@ -13,6 +13,16 @@ survive the walk between them.
 > device, a Samsung S21 (Exynos 2100, Android 15). Reports from other phones are
 > the most valuable thing you can contribute: see [Contributing](#contributing).
 
+![Bonding: two links carrying one stream](fastlane/metadata/android/en-US/images/phoneScreenshots/1_bonding.jpg)
+
+*Live, with the HUD expanded: Wi-Fi and cellular carrying 1.6 and 1.1 Mbps of one
+2.7 Mbps stream, with RTT, drops, battery and temperature.*
+
+| | |
+|---|---|
+| ![Streamer screen](fastlane/metadata/android/en-US/images/phoneScreenshots/2_stream.jpg) | ![Settings](fastlane/metadata/android/en-US/images/phoneScreenshots/3_settings.jpg) |
+| Streamer screen with quick buttons | Settings |
+
 ## Features
 
 **Transport**

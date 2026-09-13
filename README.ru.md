@@ -13,6 +13,16 @@ Wi-Fi ловит на веранде кафе, сота — на улице, а 
 > устройстве — Samsung S21 (Exynos 2100, Android 15). Отчёты с других телефонов
 > очень нужны: см. [Помощь проекту](#помощь-проекту).
 
+![Бондинг: два канала в одном потоке](fastlane/metadata/android/ru/images/phoneScreenshots/1_bonding.jpg)
+
+*Эфир с раскрытым HUD: Wi-Fi и сота несут 1.6 и 1.1 Мбит/с одного потока в
+2.7 Мбит/с, рядом RTT, дропы, заряд и температура.*
+
+| | |
+|---|---|
+| ![Экран стримера](fastlane/metadata/android/ru/images/phoneScreenshots/2_stream.jpg) | ![Настройки](fastlane/metadata/android/ru/images/phoneScreenshots/3_settings.jpg) |
+| Экран стримера с быстрыми кнопками | Настройки |
+
 ## Что умеет
 
 **Транспорт**
