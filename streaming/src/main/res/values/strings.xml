@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notif_streaming_title">BRIX — трансляция идёт</string>
+    <string name="notif_channel_name">Трансляция</string>
+    <string name="notif_connecting">Подключение…</string>
+    <string name="notif_reconnecting">Переподключение…</string>
+    <string name="notif_connected">В эфире</string>
+    <string name="notif_failed">Ошибка: %1$s</string>
+    <string name="notif_interrupted">Трансляция прервана</string>
+    <string name="notif_action_stop_screen">Вернуть камеру</string>
+    <string name="notif_action_stop">Стоп</string>
+    <string name="notif_action_reconnect">Переподключить</string>
+    <string name="notif_action_mute">Микрофон выкл</string>
+    <string name="notif_action_unmute">Микрофон вкл</string>
+</resources>

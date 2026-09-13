@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Захват экрана как источник сцены. Тип добавляется службе только ПОСЛЕ
+         согласия пользователя: на Android 14+ запуск службы с типом
+         mediaProjection без выданного разрешения запрещён. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Lint checks FGS-type permissions per module; app module declares these too (merged). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <application>
+        <service
+            android:name=".StreamService"
+            android:exported="false"
+            android:foregroundServiceType="camera|microphone|mediaProjection" />
+    </application>
+
+</manifest>

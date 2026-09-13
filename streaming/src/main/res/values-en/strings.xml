@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notif_streaming_title">BRIX — streaming</string>
+    <string name="notif_channel_name">Streaming</string>
+    <string name="notif_connecting">Connecting…</string>
+    <string name="notif_reconnecting">Reconnecting…</string>
+    <string name="notif_connected">Live</string>
+    <string name="notif_failed">Error: %1$s</string>
+    <string name="notif_interrupted">Stream interrupted</string>
+    <string name="notif_action_stop_screen">Back to camera</string>
+    <string name="notif_action_stop">Stop</string>
+    <string name="notif_action_reconnect">Reconnect</string>
+    <string name="notif_action_mute">Mute mic</string>
+    <string name="notif_action_unmute">Unmute mic</string>
+</resources>

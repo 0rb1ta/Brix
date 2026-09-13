@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Требуется для ConnectivityManager.requestNetwork(): бондинг просит у
+         системы конкретный канал (соту отдельно от Wi-Fi), чтобы держать их
+         одновременно. Без этого разрешения объединение каналов не работает.
+         registerNetworkCallback() обошёлся бы одним ACCESS_NETWORK_STATE, но
+         он только наблюдает и не поднимает канал. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="true" />
+
+    <application
+        android:name=".BrixApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Brix">
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|uiMode"
+            android:theme="@style/Theme.Brix">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- brix:// / moblin:// config-transfer deep links (see
+                 core/SettingsDeepLink.kt). No android:host constraint: our own
+                 links use host="settings", but hand-built or copy-pasted
+                 brix:// links (e.g. a raw Moblin-shaped payload someone typed
+                 under our scheme) commonly omit it — SettingsDeepLink.decode()/
+                 decodeMoblin() already validate the payload itself, so the
+                 manifest doesn't need to gatekeep on host too. singleTask
+                 above so an incoming link routes to onNewIntent() on the
+                 already-running Activity instead of spawning a second one on
+                 top of an active camera/stream session. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="brix" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="moblin" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
