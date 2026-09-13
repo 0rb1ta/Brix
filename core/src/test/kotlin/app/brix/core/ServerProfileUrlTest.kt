@@ -40,15 +40,32 @@ class ServerProfileUrlTest {
         assertEquals("rtmp://host/app/live_OLDKEY", old.connectUrl())
     }
 
+    private fun srtla(baseUrl: String, id: String = "") =
+        ServerProfile(id = "s", name = "n", type = ServerType.SRTLA, baseUrl = baseUrl, streamId = id)
+
     @Test
-    fun `у SRTLA ключ живёт в адресе и не трогается`() {
-        // Там это параметр streamid в запросе, его разбирает транспорт.
-        val srtla = ServerProfile(
-            id = "s", name = "n", type = ServerType.SRTLA,
-            baseUrl = "srtla://host:5000?streamid=live/stream/x",
-            streamId = "не должно приклеиться",
+    fun `у SRTLA идентификатор уходит в параметр streamid`() {
+        assertEquals(
+            "srtla://host:5000?streamid=live/stream/brix?srtauth=KEY",
+            srtla("srtla://host:5000", "live/stream/brix?srtauth=KEY").connectUrl(),
         )
-        assertEquals("srtla://host:5000?streamid=live/stream/x", srtla.connectUrl())
+    }
+
+    @Test
+    fun `прежний streamid в адресе отбрасывается, а не задваивается`() {
+        // Иначе при заполнении поля получилось бы два streamid подряд, и
+        // приёмник отверг бы подключение.
+        assertEquals(
+            "srtla://host:5000?streamid=новый",
+            srtla("srtla://host:5000?streamid=старый", "новый").connectUrl(),
+        )
+    }
+
+    @Test
+    fun `у SRTLA без заполненного поля адрес не меняется`() {
+        // Профили, заведённые до появления поля, держат streamid прямо в адресе.
+        val old = srtla("srtla://host:5000?streamid=live/stream/x?srtauth=KEY")
+        assertEquals("srtla://host:5000?streamid=live/stream/x?srtauth=KEY", old.connectUrl())
     }
 
     @Test

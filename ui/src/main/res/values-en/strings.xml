@@ -297,4 +297,6 @@
     <string name="field_stream_key">Stream key</string>
     <string name="field_stream_key_hint">Platforms hand it out separately from the URL. Leave empty if the key is already part of the URL.</string>
     <string name="field_stream_key_show">Show key</string>
+    <string name="field_stream_id">Stream ID</string>
+    <string name="field_stream_id_hint">Whatever follows streamid= in the URL, usually together with the srtauth key. Leave empty if it is already part of the URL.</string>
 </resources>

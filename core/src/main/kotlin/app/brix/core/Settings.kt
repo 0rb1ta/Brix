@@ -425,8 +425,18 @@ data class ServerProfile(
      */
     fun connectUrl(): String {
         val key = streamId.trim()
-        if (type != ServerType.RTMP || key.isEmpty()) return baseUrl
-        return baseUrl.trimEnd('/') + "/" + key.trimStart('/')
+        if (key.isEmpty()) return baseUrl
+        return when (type) {
+            // У RTMP ключ — последний сегмент пути.
+            ServerType.RTMP -> baseUrl.trimEnd('/') + "/" + key.trimStart('/')
+            // У SRTLA — параметр `streamid` в запросе, и внутри него обычно
+            // сидит `srtauth` с ключом доступа к приёмнику. Всё, что было в
+            // запросе у baseUrl, отбрасывается: раз поле заполнено, оно и есть
+            // источник истины, иначе получились бы два streamid подряд.
+            ServerType.SRTLA -> baseUrl.substringBefore('?').trimEnd('/') + "?streamid=" + key
+            // У WHIP ключ в адрес не выносится.
+            ServerType.WHIP -> baseUrl
+        }
     }
 }
 

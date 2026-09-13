@@ -436,13 +436,30 @@ fun ServerProfileEditScreen(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (type == ServerType.RTMP) {
+                // И у RTMP, и у SRTLA секрет доступа к каналу лежит в адресе:
+                // у первого последним сегментом пути, у второго внутри
+                // параметра streamid вместе с srtauth. Поле одно, подпись
+                // разная — площадки называют это по-разному.
+                if (type != ServerType.WHIP) {
+                    val isRtmp = type == ServerType.RTMP
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
                         value = streamKey,
                         onValueChange = { streamKey = it },
-                        label = { Text(stringResource(R.string.field_stream_key)) },
-                        supportingText = { Text(stringResource(R.string.field_stream_key_hint)) },
+                        label = {
+                            Text(
+                                stringResource(
+                                    if (isRtmp) R.string.field_stream_key else R.string.field_stream_id,
+                                ),
+                            )
+                        },
+                        supportingText = {
+                            Text(
+                                stringResource(
+                                    if (isRtmp) R.string.field_stream_key_hint else R.string.field_stream_id_hint,
+                                ),
+                            )
+                        },
                         // Точки по умолчанию: ключ трансляции — это доступ к
                         // каналу, а настройки стример открывает и в эфире тоже.
                         visualTransformation = if (keyVisible) {

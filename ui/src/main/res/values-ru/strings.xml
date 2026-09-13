@@ -297,4 +297,6 @@
     <string name="field_stream_key">Ключ трансляции</string>
     <string name="field_stream_key_hint">Площадка выдаёт его отдельно от адреса. Оставьте пустым, если ключ уже вписан в адрес.</string>
     <string name="field_stream_key_show">Показать ключ</string>
+    <string name="field_stream_id">Идентификатор потока</string>
+    <string name="field_stream_id_hint">То, что идёт после streamid= в адресе — обычно вместе с ключом srtauth. Оставьте пустым, если он уже вписан в адрес.</string>
 </resources>
