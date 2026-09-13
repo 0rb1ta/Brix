@@ -23,6 +23,42 @@ survive the walk between them.
 | ![Streamer screen](fastlane/metadata/android/en-US/images/phoneScreenshots/2_stream.jpg) | ![Settings](fastlane/metadata/android/en-US/images/phoneScreenshots/3_settings.jpg) |
 | Streamer screen with quick buttons | Settings |
 
+## This is a beta
+
+The app works and has been used on air, but this is an early version. What
+follows is an honest list of what is untested or limited. It matters more than
+the feature list: it tells you what you can rely on and what you cannot yet.
+
+**Field-tested:** SRTLA bonding over Wi-Fi and cellular, RTMP, adaptive bitrate,
+scenes, chat, donation overlays, reconnect after losing a link.
+
+**Untested:**
+
+- **WHIP** — the code is there, but nobody has run it against a live receiver.
+- **MP4 recording** — it works, but there have been no long sessions, and
+  behaviour on a full disk is unverified.
+- **Moblink** (another phone as an extra uplink) — written, but never run with a
+  real second device: the author does not have one.
+- **Any device other than the Samsung S21** (Exynos 2100, Android 15).
+  Everything known about this app's behaviour comes from that one phone.
+
+**Limitations worth knowing up front:**
+
+- **Donation overlays support DonationAlerts only.** StreamElements and other
+  services are not supported.
+- **Constant bitrate (CBR) is unavailable on the S21** — none of its hardware
+  encoders advertise it, so the actual bitrate can exceed the target. Other
+  devices may differ.
+- **Heat.** At 1080p the phone reaches the `critical` thermal state in about six
+  minutes. Throttling does not break the stream — verified, zero drops — but the
+  body gets hot. This is the hardware, not the app: camera, ISP and encoder take
+  over half the power budget.
+- **Battery.** Streaming costs 6-10 W, which is one and a half to two and a half
+  hours on the internal battery. A power bank is mandatory for long outings.
+
+If any of this breaks for you, an [issue](https://github.com/0rb1ta/Brix/issues)
+with your phone model and Android version is worth more than a patch.
+
 ## Features
 
 **Transport**
