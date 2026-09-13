@@ -29,8 +29,9 @@ The app works and has been used on air, but this is an early version. What
 follows is an honest list of what is untested or limited. It matters more than
 the feature list: it tells you what you can rely on and what you cannot yet.
 
-**Field-tested:** SRTLA bonding over Wi-Fi and cellular, RTMP, adaptive bitrate,
-scenes, chat, donation overlays, reconnect after losing a link.
+**Field-tested:** SRTLA bonding over Wi-Fi and cellular, RTMP (including
+straight to Twitch), adaptive bitrate, scenes, chat, donation overlays, reconnect
+after losing a link.
 
 **Untested:**
 
@@ -39,6 +40,7 @@ scenes, chat, donation overlays, reconnect after losing a link.
   behaviour on a full disk is unverified.
 - **Moblink** (another phone as an extra uplink) — written, but never run with a
   real second device: the author does not have one.
+- **Kick and YouTube** — they should behave like Twitch, but were not tried.
 - **Any device other than the Samsung S21** (Exynos 2100, Android 15).
   Everything known about this app's behaviour comes from that one phone.
 
@@ -130,6 +132,12 @@ in the project root — it is never committed.
   data).
 - A receiver that speaks SRTLA — for example
   [bbox-receiver](https://github.com/datagutt/bbox-receiver) on your own server.
+  Plain RTMP needs no server of your own; a platform ingest will do.
+
+There is no separate stream key field yet: for RTMP the key goes at the end of
+the URL. For Twitch that gives
+`rtmp://eun10.contribute.live-video.net/app/YOUR_KEY` — the ingest list lives
+[here](https://ingest.twitch.tv/ingests).
 
 ## Layout
 
