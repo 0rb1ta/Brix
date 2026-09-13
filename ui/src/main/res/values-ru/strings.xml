@@ -299,4 +299,5 @@
     <string name="field_stream_key_show">Показать ключ</string>
     <string name="field_stream_id">Идентификатор потока</string>
     <string name="field_stream_id_hint">То, что идёт после streamid= в адресе — обычно вместе с ключом srtauth. Оставьте пустым, если он уже вписан в адрес.</string>
+    <string name="field_url_hint_srtla">srtla://хост:5000?streamid=… — бондинг нескольких каналов. srt://хост:4000?streamid=… — обычный SRT-приёмник, один канал.</string>
 </resources>

@@ -1,4 +1,4 @@
-A free app for streaming from your phone while you move around. It publishes to Twitch and to any server that speaks RTMP or WHIP.
+A free app for streaming from your phone while you move around. It publishes to Twitch and to any server that speaks RTMP, SRT or WHIP.
 
 And when one network isn't enough, it can bond several links into a single stream, so the broadcast survives the walk from Wi-Fi to cellular instead of falling apart on the way. That part needs your own SRTLA-capable receiver.
 
@@ -11,6 +11,7 @@ It works and has been used on air, but on a single device — a Samsung S21. Unt
 TRANSPORT
 
 * SRTLA — bonds several links into one stream. The SRT and SRTLA client is written from scratch, not a wrapper around someone else's library.
+* Plain SRT for receivers without SRTLA; the URL scheme picks the mode.
 * RTMP and WHIP for when bonding isn't needed.
 * Per-link priorities and weights, reconnect after a drop.
 * Adaptive bitrate: RTT and its jitter, send buffer size, window-forced losses. Three aggressiveness profiles.

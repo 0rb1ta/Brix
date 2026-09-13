@@ -299,4 +299,5 @@
     <string name="field_stream_key_show">Show key</string>
     <string name="field_stream_id">Stream ID</string>
     <string name="field_stream_id_hint">Whatever follows streamid= in the URL, usually together with the srtauth key. Leave empty if it is already part of the URL.</string>
+    <string name="field_url_hint_srtla">srtla://host:5000?streamid=… bonds several links. srt://host:4000?streamid=… is a plain SRT receiver, one link.</string>
 </resources>

@@ -490,7 +490,15 @@ class SrtSender(
             Srt.PacketType.KEEPALIVE.rawValue -> handleKeepAlivePacket()
             Srt.PacketType.ACK.rawValue -> handleAckPacket(packet, now)
             Srt.PacketType.NAK.rawValue -> handleNakPacket(packet)
-            Srt.PacketType.SHUTDOWN.rawValue -> setDisconnected()
+            Srt.PacketType.SHUTDOWN.rawValue -> {
+                // Приёмник закрыл сессию сам. Разбирая лог, это надо отличать
+                // от нашего таймаута по тишине: причины разные. Чаще всего так
+                // выглядит занятый ключ потока — на сервере уже есть издатель
+                // с тем же streamid, и новую сессию он убивает сразу после
+                // рукопожатия.
+                android.util.Log.w("Srtla", "srt-sender: SHUTDOWN от приёмника state=$state")
+                setDisconnected()
+            }
         }
         // Насос отсюда НЕ запускается: см. outputPackets. Отправка идёт в такт
         // медиа, а не в такт входящим подтверждениям.

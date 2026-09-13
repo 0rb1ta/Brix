@@ -127,6 +127,17 @@ class SrtlaStreamer(
                     Log.w(tag, "onNetworkAvailable type=$type weight=$weight — channel disabled, skipping")
                     return@onNetworkAvailable
                 }
+                // Обычный SRT: второй канал не заводим вовсе. Мало не слать по
+                // нему данные — сам открытый сокет к тому же серверу ломает
+                // сессию: SRT привязан к паре адрес-порт, и приёмник отвечает
+                // туда, откуда последним что-то получил. Полевой прогон 14.09:
+                // данные шли по Wi-Fi, подтверждения приходили на соту, эфир
+                // умирал. Объединять тут всё равно нечего — серверной стороны
+                // SRTLA нет.
+                if (!srtlaClient.useSrtla && srtlaClient.connectionCount() > 0) {
+                    Log.i(tag, "onNetworkAvailable type=$type — обычный SRT, канал уже есть, второй не нужен")
+                    return@onNetworkAvailable
+                }
                 val connection = srtlaClient.addConnection(
                     type = type,
                     priority = weight.toFloat(),

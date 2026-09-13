@@ -44,6 +44,17 @@ class SrtlaClient {
     // matches.
     private val epoch = AtomicLong(0)
 
+    /**
+     * Добавить канал. В простом режиме SRT второй канал не заводится вовсе.
+     *
+     * Мало не отправлять по нему данные: сам факт открытого сокета к тому же
+     * серверу ломает сессию. SRT привязан к паре адрес-порт, и приёмник шлёт
+     * ответы туда, откуда последним что-то получил. Полевой прогон 14.09:
+     * данные уходили по Wi-Fi, а подтверждения приходили на соту — счётчик
+     * неподтверждённых рос, адаптивный битрейт резал, эфир умирал.
+     *
+     * Объединять в этом режиме всё равно нечего: серверной стороны SRTLA нет.
+     */
     fun addConnection(
         type: String,
         priority: Float,
@@ -51,13 +62,14 @@ class SrtlaClient {
         resolve: ((String) -> java.net.InetAddress?)? = null,
     ): SrtlaConnection =
         synchronized(lifecycleLock) {
-            val connection = SrtlaConnection(type, priority, bindSocket, resolve)
+            val connection = SrtlaConnection(type, priority, bindSocket, resolve, useSrtla)
             connection.delegate = connectionDelegate
             connections.add(connection)
             connection
         }
 
     fun removeConnection(connection: SrtlaConnection) {
+        if (plainPrimary === connection) plainPrimary = null
         synchronized(lifecycleLock) {
             connections.remove(connection)
             connection.stop()
@@ -76,6 +88,32 @@ class SrtlaClient {
             connection.start(host, port, e)
         }
     }
+
+    /**
+     * Говорить ли по SRTLA. Ставится до [start] из разбора схемы адреса:
+     * `srtla://` — бондинг с групповой регистрацией, `srt://` — обычный
+     * приёмник, который пакетов SRTLA не знает.
+     *
+     * В простом режиме объединять нечего: серверной стороны SRTLA нет, и
+     * второй канал приёмник просто не свяжет с первым. Поэтому работает один
+     * линк — тот, что поднялся.
+     */
+    @Volatile
+    var useSrtla: Boolean = true
+
+    /**
+     * Линк, по которому идёт весь поток в простом режиме SRT.
+     *
+     * В SRTLA пакеты намеренно размазываются по каналам: серверная сторона их
+     * склеивает обратно. У обычного SRT такой стороны нет — сессия привязана к
+     * паре адрес-порт, и пакеты со второго сокета сервер видит как чужие. Один
+     * линк, выбранный первым, несёт всё; остальные поднимаются, но простаивают.
+     *
+     * Полевой прогон 14.09: без этого поток шёл сразу по Wi-Fi и соте, что для
+     * обычного SRT бессмысленно и ломает сессию.
+     */
+    @Volatile
+    private var plainPrimary: SrtlaConnection? = null
 
     fun start(host: String, port: Int) = synchronized(lifecycleLock) {
         this.host = host
@@ -101,6 +139,9 @@ class SrtlaClient {
         connections.forEach { it.stop() }
         epoch.addAndGet(2)
         groupId = null
+        // Иначе следующая сессия закрепится за линком прошлой — уже
+        // остановленным, и весь поток уйдёт в никуда.
+        plainPrimary = null
     }
 
     /** Tear down every connection: stop its socket/read thread and drop it.
@@ -112,6 +153,7 @@ class SrtlaClient {
         //.
         connections.forEach { it.stop() }
         connections.clear()
+        plainPrimary = null
     }
 
     fun isRunning(): Boolean = state == State.RUNNING
@@ -124,11 +166,15 @@ class SrtlaClient {
         // to it are lost → "flow window overflow", stream stuck. Control packets
         // (handshake/ACK/NAK/keepalive) stick to the single primary link so the
         // SRT session establishes cleanly.
-        val connection = if (Srt.isDataPacket(packet)) {
-            selectDataConnection()
-        } else {
-            selectConnection()
-        } ?: return
+        val picked = when {
+            // Простой SRT: всё уходит по одному закреплённому линку, и медиа,
+            // и служебное. Раздача по каналам здесь не просто бесполезна —
+            // она рвёт сессию, потому что второй сокет для сервера чужой.
+            !useSrtla -> plainPrimary
+            Srt.isDataPacket(packet) -> selectDataConnection()
+            else -> selectConnection()
+        }
+        val connection = picked ?: return
         connection.sendSrtPacket(packet)
     }
 
@@ -242,6 +288,19 @@ class SrtlaClient {
         override fun onSocketConnected(connection: SrtlaConnection) {
             if (!connection.matchesEpoch(epoch.get())) return
             Log.d(TAG, "srtla-client: onSocketConnected state=$state conn=${connection.type}")
+            if (!useSrtla) {
+                // В простом режиме каждый поднявшийся линк объявляем готовым
+                // сразу, не глядя на состояние клиента: иначе второй остаётся
+                // в PREREG навсегда (первый успел перевести клиент в RUNNING,
+                // и проверка состояния ниже его отсекала). Полевой прогон
+                // 13.09 показал ровно это — cellular висел в PREREG.
+                if (state == State.WAIT_FOR_REMOTE_SOCKET_CONNECTED) {
+                    state = State.WAIT_FOR_REGISTERED
+                }
+                if (plainPrimary == null) plainPrimary = connection
+                connection.markReadyWithoutSrtla()
+                return
+            }
             if (state != State.WAIT_FOR_REMOTE_SOCKET_CONNECTED) return
             // Advance the state BEFORE sending probe so a fast REG_NGP cannot
             // race ahead and be dropped.

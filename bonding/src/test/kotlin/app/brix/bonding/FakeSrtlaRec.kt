@@ -32,6 +32,14 @@ import kotlin.concurrent.thread
  */
 private const val FOREIGN_KEEPALIVE_STAMP = -777_000L
 
+private val SRTLA_CONTROL_TYPES = setOf(
+    Srtla.PacketType.KEEPALIVE.rawValue,
+    Srtla.PacketType.ACK.rawValue,
+    Srtla.PacketType.REG1.rawValue,
+    Srtla.PacketType.REG2.rawValue,
+    Srtla.PacketType.REG3.rawValue,
+)
+
 class FakeSrtlaRec(
     private val dropReg3Count: Int = 0,
     private val dropConclusionReplies: Boolean = false,
@@ -41,6 +49,10 @@ class FakeSrtlaRec(
     private val originateKeepalives: Boolean = false,
     private val ackData: Boolean = true,
     private val floodInboundEveryMs: Long = 0,
+    /** Притворяться обычным SRT-приёмником: пакеты SRTLA игнорировать целиком,
+     *  как это делает настоящий srt-live-transmit или вход SRT в OBS. Отвечать
+     *  только на рукопожатие SRT. */
+    private val plainSrt: Boolean = false,
 ) {
     val socket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
     val port: Int = socket.localPort
@@ -52,6 +64,15 @@ class FakeSrtlaRec(
     private var listenerSocketId = 0x5A5A_0001L
     private var synCookie = 0x0C0FFEE0L
     private val received = ConcurrentLinkedQueue<ByteArray>()
+    private val sourcePorts = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+
+    /** Всё, что пришло от клиента, в порядке получения. Пишется ДО любых
+     *  фильтров, поэтому по этому списку видно, что клиент реально отправил. */
+    fun receivedPackets(): List<ByteArray> = received.toList()
+
+    /** Исходящие порты, с которых к нам приходили пакеты. По их числу видно,
+     *  сколько линков реально несут поток. */
+    fun receivedSourcePorts(): Set<Int> = sourcePorts.toSet()
 
     /** How many SRTLA keepalives we bounced back, for tests that assert the
      *  round trip happened at all. */
@@ -84,6 +105,7 @@ class FakeSrtlaRec(
                     val packet = DatagramPacket(buf, buf.size)
                     socket.receive(packet)
                     lastPeer = packet.socketAddress
+                    sourcePorts.add(packet.port)
                     onPacket(packet.data.copyOf(packet.length))
                 } catch (_: SocketTimeoutException) {
                 } catch (_: Exception) {
@@ -154,11 +176,17 @@ class FakeSrtlaRec(
                 // первый, и из-за этого сторож доставки был построен на неверном
                 // сигнале — в поле он не сработал ни разу.
                 reply(packetTo(packet, Srt.PacketType.ACK.rawValue))
-                reply(srtlaAck(Srt.getSequenceNumber(packet)))
+                // SRTLA-ACK шлёт только приёмник SRTLA. Обычный про него не знает.
+                if (!plainSrt) reply(srtlaAck(Srt.getSequenceNumber(packet)))
             }
             return
         }
-        when (val type = Srt.getControlPacketType(packet)) {
+        val ctl = Srt.getControlPacketType(packet)
+        // Обычный приёмник о SRTLA не знает: её служебные пакеты для него
+        // мусор, и он их молча отбрасывает. Именно поэтому клиент в этом
+        // режиме не должен их слать вовсе.
+        if (plainSrt && ctl in SRTLA_CONTROL_TYPES) return
+        when (val type = ctl) {
             Srtla.PacketType.REG1.rawValue -> {
                 if (reg1Dropped < dropReg1Replies) {
                     // The group is never created and no REG2 comes back: the

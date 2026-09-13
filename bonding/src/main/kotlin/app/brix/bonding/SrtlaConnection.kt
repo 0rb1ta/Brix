@@ -22,6 +22,19 @@ class SrtlaConnection(
      * поэтому и не всплывал. null — прежнее поведение.
      */
     val resolve: ((String) -> InetAddress?)? = null,
+    /**
+     * Говорить ли по SRTLA. `true` — как раньше: групповая регистрация
+     * (PROBE, REG1, REG2, REG3) и keepalive раз в секунду.
+     *
+     * `false` — обычный SRT-приёмник на том конце. Он не знает пакетов SRTLA:
+     * регистрацию проигнорирует, а keepalive с типом 0x1000 получит как мусор.
+     * Поэтому в этом режиме соединение после открытия сокета сразу считается
+     * готовым, и служебных пакетов SRTLA не отправляется вовсе.
+     *
+     * Данные при этом одинаковы: SRTLA их не заворачивает, `sendSrtPacket`
+     * кладёт пакет SRT в сокет как есть.
+     */
+    private val useSrtla: Boolean = true,
 ) {
     interface Delegate {
         fun onSocketConnected(connection: SrtlaConnection)
@@ -303,6 +316,22 @@ class SrtlaConnection(
         Log.w(TAG, "srtla: $type handleReady state=$st hasFull=$hasFullGroupId sendReg2=$sendReg2")
         if (sendReg2) sendSrtlaReg2()
         delegate?.onSocketConnected(this)
+    }
+
+    /**
+     * Объявить соединение готовым без регистрации SRTLA — для режима обычного
+     * SRT. Вызывается вместо связки probe/register, когда [useSrtla] выключен.
+     */
+    fun markReadyWithoutSrtla() {
+        synchronized(lock) {
+            if (!running) return
+            state = State.REGISTERED
+            // Время последнего входящего заводим сейчас: сторож «зарегистрирован,
+            // но трафика нет» иначе сработает сразу, не дождавшись рукопожатия SRT.
+            latestReceivedTime = nowMillis()
+        }
+        Log.d(TAG, "srtla: $type готов без регистрации (обычный SRT)")
+        delegate?.onRegistered(this)
     }
 
     fun probe() {
@@ -600,7 +629,9 @@ class SrtlaConnection(
         synchronized(lock) {
             when (state) {
                 State.REGISTERED -> {
-                    if (lastKeepAliveSendTime == 0L || now - lastKeepAliveSendTime >= 1000) {
+                    // В простом SRT keepalive не шлём: у приёмника нет разбора
+                    // пакетов SRTLA, и тип 0x1000 для него мусор.
+                    if (useSrtla && (lastKeepAliveSendTime == 0L || now - lastKeepAliveSendTime >= 1000)) {
                         lastKeepAliveSendTime = now
                         // Build the packet under lock but send it OUTSIDE to
                         // avoid blocking on socket.send() while holding the
@@ -629,7 +660,17 @@ class SrtlaConnection(
                     val unconfirmedBytes = totalBytesSent - bytesSentAtLastDeliveryAck
                     val noDelivery = unconfirmedBytes > DELIVERY_PROBE_BYTES &&
                         now - lastDeliveryAckTime > DELIVERY_WATCHDOG_MS
-                    if (now - latestReceivedTime > RECOVERY_WATCHDOG_MS || noDelivery) {
+                    // В простом SRT этот сторож не применим. Он судит о жизни
+                    // канала по подтверждениям доставки уровня SRTLA, а их там
+                    // нет по определению — значит `noDelivery` срабатывает через
+                    // пару секунд эфира на ровном месте. Дальше он
+                    // перерегистрирует соединение, которого приёмник не ждёт, и
+                    // эфир умирает. Полевой разбор 14.09: канал уходил в
+                    // WAITREG, входящие прекращались, неподтверждённые росли.
+                    //
+                    // За живучесть в этом режиме отвечает сам SRT: у него свой
+                    // таймаут по тишине, и он отрабатывает штатно.
+                    if (useSrtla && (now - latestReceivedTime > RECOVERY_WATCHDOG_MS || noDelivery)) {
                         // Эталон belabox: 4с без входящих = соединение мертво ->
                         // полный сброс состояния и повторная регистрация ТЕМ ЖЕ
                         // сокетом (порт не меняется — смена порта плодит NAT-

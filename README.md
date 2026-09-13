@@ -29,9 +29,9 @@ The app works and has been used on air, but this is an early version. What
 follows is an honest list of what is untested or limited. It matters more than
 the feature list: it tells you what you can rely on and what you cannot yet.
 
-**Field-tested:** SRTLA bonding over Wi-Fi and cellular, RTMP (including
-straight to Twitch), adaptive bitrate, scenes, chat, donation overlays, reconnect
-after losing a link.
+**Field-tested:** SRTLA bonding over Wi-Fi and cellular, plain SRT, RTMP
+(including straight to Twitch), adaptive bitrate, scenes, chat, donation
+overlays, reconnect after losing a link.
 
 **Untested:**
 
@@ -68,6 +68,8 @@ with your phone model and Android version is worth more than a patch.
 - **SRTLA** — bonds several links (Wi-Fi, cellular, relays) into one stream.
   The SRT and SRTLA client is written from scratch in Kotlin; it is not a
   wrapper around libsrt.
+- **Plain SRT** for receivers without SRTLA. The URL scheme picks the mode:
+  `srtla://` bonds links, `srt://` talks to any SRT server.
 - **RTMP** and **WHIP** for when bonding isn't needed.
 - Per-link priorities and weights, reconnect with growing backoff.
 - Adaptive bitrate in the BELABOX spirit: mean and minimum RTT, jitter, send
@@ -130,9 +132,10 @@ in the project root — it is never committed.
 - A hardware H.264 or HEVC encoder.
 - For bonding, several network interfaces at once (usually Wi-Fi and mobile
   data).
-- A receiver that speaks SRTLA — for example
+- For bonding, a receiver that speaks SRTLA — for example
   [bbox-receiver](https://github.com/datagutt/bbox-receiver) on your own server.
-  Plain RTMP needs no server of your own; a platform ingest will do.
+  Plain SRT works with any SRT receiver (`srt-live-transmit`, SLS, OBS's SRT
+  input), and RTMP needs no server of your own at all.
 
 There is no separate stream key field yet: for RTMP the key goes at the end of
 the URL. For Twitch that gives

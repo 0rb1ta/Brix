@@ -375,6 +375,12 @@ class SrtlaStream(
             connectChecker.onConnectionFailed("Malformed srtla URL")
             return
         }
+        // Схема выбирает режим, а не отдельный тип сервера — так же устроено в
+        // Moblin, откуда приходит часть людей. `srtla://` — бондинг с групповой
+        // регистрацией, `srt://` — обычный приёмник, который пакетов SRTLA не
+        // знает. Всё остальное (рукопожатие SRT, streamid, окно, переотправка)
+        // в обоих режимах одинаково: SRTLA данные не заворачивает.
+        srtlaClient.useSrtla = !uri.scheme.equals("srt", ignoreCase = true)
         val streamId = parseStreamId(uri)
         srtSender.streamId = streamId.ifBlank { null }
         connectChecker.onConnectionStarted(endPoint)

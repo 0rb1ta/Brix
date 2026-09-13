@@ -421,7 +421,7 @@ fun ServerProfileEditScreen(
                 BrixSegmentRow(
                     title = stringResource(R.string.field_type),
                     options = listOf(
-                        ServerType.SRTLA to "SRTLA",
+                        ServerType.SRTLA to "SRT(LA)",
                         ServerType.RTMP to "RTMP",
                         ServerType.WHIP to "WHIP",
                     ),
@@ -433,6 +433,13 @@ fun ServerProfileEditScreen(
                     value = baseUrl,
                     onValueChange = { baseUrl = it },
                     label = { Text(stringResource(R.string.field_url)) },
+                    // Схема адреса выбирает режим, а не отдельный тип сервера:
+                    // так же устроено в Moblin, откуда приходит часть людей.
+                    supportingText = if (type == ServerType.SRTLA) {
+                        { Text(stringResource(R.string.field_url_hint_srtla)) }
+                    } else {
+                        null
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )

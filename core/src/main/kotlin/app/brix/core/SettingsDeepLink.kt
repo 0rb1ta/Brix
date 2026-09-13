@@ -142,6 +142,10 @@ object SettingsDeepLink {
                 val stream = entry as? JsonObject ?: continue
                 val name = stream["name"]?.jsonPrimitive?.content ?: continue
                 val url = stream["url"]?.jsonPrimitive?.content ?: continue
+                // Обе схемы дают один тип: SRT(LA) — это один транспорт с двумя
+                // режимами, и выбирает режим схема адреса, а не тип профиля.
+                // `srtla://` — бондинг с групповой регистрацией, `srt://` —
+                // обычный приёмник без неё.
                 val type = if (url.startsWith("srt://") || url.startsWith("srtla://")) {
                     ServerType.SRTLA
                 } else {
