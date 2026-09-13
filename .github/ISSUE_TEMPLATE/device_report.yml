@@ -1,0 +1,85 @@
+name: Device report / Отчёт с устройства
+description: Tell us how Brix behaves on your phone. Русский тоже подойдёт.
+title: "[device] "
+labels: ["device-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Everything known about this app comes from a single Samsung S21, so a
+        report from any other phone is genuinely the most useful thing you can
+        send. It does not have to describe a bug — "it just works" is valuable
+        too.
+
+        Всё, что известно о приложении, получено на одном Samsung S21. Отчёт с
+        любого другого телефона — самое полезное, что можно прислать. Это не
+        обязательно должна быть поломка: «просто работает» тоже ценно.
+
+  - type: input
+    id: device
+    attributes:
+      label: Phone model / Модель телефона
+      placeholder: Samsung Galaxy S21 (SM-G991B)
+    validations:
+      required: true
+
+  - type: input
+    id: android
+    attributes:
+      label: Android version / Версия Android
+      placeholder: "15"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Brix version / Версия Brix
+      description: Shown in the HUD on the streamer screen. Видно в HUD на экране стримера.
+      placeholder: 0.1.0-beta
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport / Транспорт
+      multiple: true
+      options:
+        - SRTLA (bonding)
+        - SRTLA (single link)
+        - RTMP
+        - WHIP
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / Что произошло
+      description: |
+        What you did, what you expected, what actually happened.
+        Что делали, чего ждали, что получилось.
+    validations:
+      required: true
+
+  - type: textarea
+    id: encoder
+    attributes:
+      label: Encoder line from the log / Строка про энкодер из лога
+      description: |
+        Optional but very useful. Connect the phone and run:
+        `adb logcat -d | grep -iE "профиль|Encoder selected|bitrate mode"`
+        This tells us which encoder your phone picked and whether it supports
+        constant bitrate — the S21 does not, and we do not know how common that is.
+
+        Необязательно, но очень помогает. Подключите телефон и выполните ту же
+        команду: она показывает, какой энкодер выбрал ваш телефон и держит ли он
+        постоянный битрейт. S21 не держит, а насколько это распространено — мы не знаем.
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else / Что-нибудь ещё
+      description: Heat, battery drain, how long the stream lasted. Нагрев, расход батареи, сколько продержался эфир.

@@ -1,0 +1,5 @@
+First public release.
+
+SRTLA link bonding, RTMP and WHIP transports, adaptive bitrate, scenes with a standby image and screen capture, Twitch/Kick/VK Video Live chat, DonationAlerts overlays, Moblink, MP4 recording and a per-second session log.
+
+This is a beta: used on air, but on a single device. WHIP, long recordings and Moblink are untested. Reports from other phones are what this project needs most.

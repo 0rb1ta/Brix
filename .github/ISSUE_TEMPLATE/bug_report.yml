@@ -1,0 +1,59 @@
+name: Bug report / Ошибка
+description: Something is broken. Что-то сломалось.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the "This is a beta" section of the README first — WHIP,
+        MP4 recording on long sessions and Moblink are known to be untested.
+
+        Сначала загляните в раздел README «Это бета»: WHIP, запись в MP4 на
+        длинных сессиях и Moblink заведомо не проверялись.
+
+  - type: input
+    id: device
+    attributes:
+      label: Phone and Android version / Телефон и версия Android
+      placeholder: Samsung Galaxy S21 (SM-G991B), Android 15
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Brix version / Версия Brix
+      placeholder: 0.1.0-beta
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce / Как повторить
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual / Ожидалось и получилось
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log / Лог
+      description: |
+        `adb logcat -d -s BrixStream BrixStat Srtla Brix` covers most of it.
+        If the app crashed, Settings → About → Diagnostics has the crash report.
+
+        `adb logcat -d -s BrixStream BrixStat Srtla Brix` покрывает почти всё.
+        Если приложение упало, отчёт лежит в Настройки → О приложении → Диагностика.
+      render: shell

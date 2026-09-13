@@ -1715,8 +1715,12 @@ private fun HudCard(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MetricCell("RTT", firstRtt(state), false)
                 MetricCell(stringResource(R.string.hud_drops), "%.1f%%".format(java.util.Locale.US, dropPct), dropPct > 2f)
-                MetricCell("Батарея", if (telemetry.batteryPct >= 0) "${telemetry.batteryPct}%" else "—", batteryWarn)
-                MetricCell("Температура", thermalText(telemetry), thermalWarn)
+                MetricCell(
+                    stringResource(R.string.hud_battery),
+                    if (telemetry.batteryPct >= 0) "${telemetry.batteryPct}%" else "—",
+                    batteryWarn,
+                )
+                MetricCell(stringResource(R.string.hud_thermal), thermalText(telemetry), thermalWarn)
             }
         }
     }

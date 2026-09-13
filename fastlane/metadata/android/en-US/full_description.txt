@@ -1,0 +1,40 @@
+A free app for streaming from your phone while you move around. It publishes to any server that speaks RTMP, SRT or WHIP.
+
+And when one network isn't enough, it can bond several links into a single stream, so the broadcast survives the walk from Wi-Fi to cellular instead of falling apart on the way. That part needs your own SRTLA-capable receiver.
+
+An open alternative to the closed IRL apps on Android.
+
+THIS IS A BETA
+
+It works and has been used on air, but on a single device — a Samsung S21. Untested: WHIP against a live receiver, MP4 recording over long sessions, Moblink with a real second phone. Donation overlays support DonationAlerts only. The full list of limitations is in the project description on GitHub.
+
+TRANSPORT
+
+* SRTLA — bonds several links into one stream. The SRT and SRTLA client is written from scratch, not a wrapper around someone else's library.
+* RTMP and WHIP for when bonding isn't needed.
+* Per-link priorities and weights, reconnect after a drop.
+* Adaptive bitrate: RTT and its jitter, send buffer size, window-forced losses. Three aggressiveness profiles.
+
+VIDEO AND AUDIO
+
+* 720p and 1080p, H.264 and HEVC, hardware encoder.
+* Scenes: camera, a "be right back" still, or screen capture. Each carries its own overlays, camera side and audio mode.
+* Lens selection, zoom, torch, tap to focus, optical and electronic stabilisation controlled separately.
+* Microphone capsule selection, including wired, Bluetooth and USB.
+
+AUDIENCE
+
+* Twitch, Kick and VK Video Live chat in one feed, anonymously. Shown to the streamer only, never in the stream.
+* DonationAlerts overlays: image and caption drawn straight into the frame, with the donation sound optionally mixed in.
+* Any web page as a source of picture in the frame.
+
+ALSO
+
+* Moblink: another phone contributes its link as an extra uplink.
+* MP4 recording alongside the broadcast, from the same encoder.
+* Configurable HUD and quick buttons on the streamer screen.
+* Session log: power, temperature and transport figures once per second, for outings where no debugger can be attached.
+
+REQUIREMENTS
+
+Android 10 or newer, a hardware encoder, and a receiver that speaks SRTLA. Bonding needs several network interfaces at once.
