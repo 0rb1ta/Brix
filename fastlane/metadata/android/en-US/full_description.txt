@@ -1,4 +1,4 @@
-A free app for streaming from your phone while you move around. It publishes to Twitch and to any server that speaks RTMP, SRT or WHIP.
+A free app for streaming from your phone while you move around. It publishes to Twitch and to any server that speaks RTMP or WHIP.
 
 And when one network isn't enough, it can bond several links into a single stream, so the broadcast survives the walk from Wi-Fi to cellular instead of falling apart on the way. That part needs your own SRTLA-capable receiver.
 
