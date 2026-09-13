@@ -1,0 +1,7 @@
+Plain SRT for receivers without SRTLA. The URL scheme picks the mode:
+srtla:// bonds links, srt:// talks to any SRT server.
+
+The stream key moved into its own field, masked — it used to go into the URL,
+where it was shown in full.
+
+Fixed: importing an srt:// address created a profile that could never connect.
