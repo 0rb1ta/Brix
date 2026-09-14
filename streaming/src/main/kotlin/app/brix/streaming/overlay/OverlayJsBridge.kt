@@ -88,6 +88,12 @@ class OverlayJsBridge(
     @Volatile
     var audioInStream = false
 
+    @Volatile
+    var captionScale = 1f
+
+    @Volatile
+    var captionVisible = true
+
     /** Called from the widget's JS when a new alert image appears.
      *  [audioUrlsJson] is a JSON array of zero or more sound URLs (chat
      *  chime, TTS readout, voice message — whichever the widget actually
@@ -117,6 +123,8 @@ class OverlayJsBridge(
             posY = posY,
             width = widthFraction,
             height = heightFraction,
+            captionScale = captionScale,
+            captionVisible = captionVisible,
         )
         controller.show(
             media,

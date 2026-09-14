@@ -142,11 +142,11 @@ object Diagnostics {
                 vkClientId = "",
                 vkClientSecret = "",
             ),
-            // У оверлея в url — токен виджета DonationAlerts, у браузерного
-            // виджета — произвольная страница владельца. Геометрия и звук
-            // остаются: именно они объясняют нагрузку на кадр.
-            overlays = settings.overlays.map { it.copy(url = "") },
-            browserWidgets = settings.browserWidgets.map { it.copy(url = "") },
+            // У донат-алерта в url — токен виджета DonationAlerts, у веб-виджета
+            // произвольная страница владельца, у картинки путь к файлу на его
+            // телефоне, а в тексте — то, что он написал сам. Тип, геометрия и
+            // звук остаются: именно они объясняют нагрузку на кадр.
+            widgets = settings.widgets.map { it.copy(url = "", imageUri = "", template = "", name = "") },
             // Имя сцены человек пишет сам, а imageUri — путь к файлу на его
             // телефоне, обычно с именем пользователя внутри.
             scenes = settings.scenes.map { it.copy(name = "", imageUri = "") },

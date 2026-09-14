@@ -114,6 +114,12 @@ interface LiveStreamer {
      *  isn't square, so width-fraction and height-fraction aren't the same
      *  physical scale). */
     fun videoFrameSize(): Point?
+
+    /** Снимок текущего кадра — того, что видит зритель, вместе с оверлеями и
+     *  эффектами. Берётся из GL-цепочки, а не с камеры, поэтому это именно
+     *  кадр эфира, а не отдельный фотоснимок. [onResult] вызывается на
+     *  GL-потоке; null — если кадр взять не удалось. */
+    fun takeSnapshot(onResult: (android.graphics.Bitmap?) -> Unit)
     /** Report whether a donation overlay's widget is currently connected to
      *  its alert server, aggregated (any-connected) into [StreamState.donationWidgetConnected]. */
     fun setOverlayConnectionState(overlayId: String, connected: Boolean)

@@ -122,19 +122,15 @@ fun ScenesScreen(
     }
 
     if (pendingDelete != null) {
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(stringResource(R.string.scenes_delete_title)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete?.let { viewModel.deleteScene(it) }
-                    pendingDelete = null
-                }) { Text(stringResource(R.string.btn_delete)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) {
-                    Text(stringResource(R.string.btn_cancel))
-                }
+        BrixDialog(
+            title = stringResource(R.string.scenes_delete_title),
+            onDismiss = { pendingDelete = null },
+            dismissLabel = stringResource(R.string.btn_cancel),
+            confirmLabel = stringResource(R.string.btn_delete),
+            destructive = true,
+            onConfirm = {
+                pendingDelete?.let { viewModel.deleteScene(it) }
+                pendingDelete = null
             },
         )
     }
@@ -164,10 +160,7 @@ fun SceneEditScreen(
     var source by rememberSaveable(sceneId) { mutableStateOf(existing?.source ?: SceneSource.CAMERA) }
     var sceneAudio by rememberSaveable(sceneId) { mutableStateOf(existing?.audio ?: SceneAudio.MIC) }
     var imageUri by rememberSaveable(sceneId) { mutableStateOf(existing?.imageUri ?: "") }
-    var overlayIds by rememberSaveable(sceneId) { mutableStateOf(existing?.overlayIds?.toSet() ?: emptySet()) }
-    var widgetIds by rememberSaveable(sceneId) {
-        mutableStateOf(existing?.browserWidgetIds?.toSet() ?: emptySet())
-    }
+    var widgetIds by rememberSaveable(sceneId) { mutableStateOf(existing?.widgetIds?.toSet() ?: emptySet()) }
 
     val context = LocalContext.current
     val picker = rememberLauncherForActivityResult(
@@ -200,8 +193,7 @@ fun SceneEditScreen(
                             audio = sceneAudio,
                             imageUri = imageUri,
                             camera = camera,
-                            overlayIds = overlayIds.toList(),
-                            browserWidgetIds = widgetIds.toList(),
+                            widgetIds = widgetIds.toList(),
                         ),
                     )
                     onBack()
@@ -301,7 +293,7 @@ fun SceneEditScreen(
                 }
             }
 
-            val hasLayers = settings.overlays.isNotEmpty() || settings.browserWidgets.isNotEmpty()
+            val hasLayers = settings.widgets.isNotEmpty()
             BrixCard {
                 Spacer(Modifier.height(12.dp))
                 Text(
@@ -312,18 +304,10 @@ fun SceneEditScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
-                settings.overlays.forEach { overlay ->
+                settings.widgets.forEach { widget ->
                     BrixToggleRow(
-                        title = shortUrl(overlay.url),
-                        subtitle = stringResource(R.string.settings_overlay),
-                        checked = overlay.id in overlayIds,
-                        divider = true,
-                    ) { on -> overlayIds = if (on) overlayIds + overlay.id else overlayIds - overlay.id }
-                }
-                settings.browserWidgets.forEach { widget ->
-                    BrixToggleRow(
-                        title = shortUrl(widget.url),
-                        subtitle = stringResource(R.string.browser_widget_section),
+                        title = widget.name.ifBlank { shortUrl(widget.displayTitle()) },
+                        subtitle = stringResource(widgetKindLabel(widget.kind)),
                         checked = widget.id in widgetIds,
                         divider = true,
                     ) { on -> widgetIds = if (on) widgetIds + widget.id else widgetIds - widget.id }
@@ -355,6 +339,6 @@ private fun sceneSummary(scene: Scene): String {
                 if (scene.camera == CameraSide.FRONT) R.string.btn_front else R.string.btn_rear
         },
     )
-    val layers = scene.overlayIds.size + scene.browserWidgetIds.size
+    val layers = scene.widgetIds.size
     return if (layers == 0) what else stringResource(R.string.scenes_summary, what, layers)
 }

@@ -538,22 +538,16 @@ fun ServerProfileEditScreen(
     }
 
     if (confirmDelete && profileId != null) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text(stringResource(R.string.dialog_delete_server_title)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDelete = false
-                    viewModel.deleteServerProfile(profileId)
-                    onBack()
-                }) {
-                    Text(stringResource(R.string.btn_delete))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) {
-                    Text(stringResource(R.string.btn_cancel))
-                }
+        BrixDialog(
+            title = stringResource(R.string.dialog_delete_server_title),
+            onDismiss = { confirmDelete = false },
+            dismissLabel = stringResource(R.string.btn_cancel),
+            confirmLabel = stringResource(R.string.btn_delete),
+            destructive = true,
+            onConfirm = {
+                confirmDelete = false
+                viewModel.deleteServerProfile(profileId)
+                onBack()
             },
         )
     }

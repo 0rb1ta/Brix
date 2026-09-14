@@ -71,7 +71,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.brix.core.CameraSide
-import app.brix.core.BrowserWidgetConfig
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import app.brix.core.SceneWidget
+import app.brix.core.WidgetKind
 import app.brix.core.normalizeLanguageTag
 import app.brix.core.OverlayConfig
 import app.brix.core.AudioProcessing
@@ -93,8 +96,8 @@ sealed interface SettingsRoute {
     data object Audio : SettingsRoute
     data object Appearance : SettingsRoute
     data object Hud : SettingsRoute
-    data object Overlay : SettingsRoute
-    data object BrowserWidgets : SettingsRoute
+    /** Единый список виджетов сцены — заменил «Оверлеи» и «Браузерные виджеты». */
+    data object Widgets : SettingsRoute
     data object Language : SettingsRoute
     data object Advanced : SettingsRoute
     data object About : SettingsRoute
@@ -102,8 +105,8 @@ sealed interface SettingsRoute {
     data object DevicePassport : SettingsRoute
     data class StreamProfileEdit(val profileId: String?) : SettingsRoute
     data class ServerProfileEdit(val profileId: String?) : SettingsRoute
-    data class OverlayEdit(val overlayId: String?) : SettingsRoute
-    data class BrowserWidgetEdit(val widgetId: String?) : SettingsRoute
+    /** [newKind] задан только при создании: тип выбирается до открытия формы. */
+    data class WidgetEdit(val widgetId: String?, val newKind: WidgetKind? = null) : SettingsRoute
 }
 
 enum class SettingsCategory {
@@ -141,7 +144,7 @@ fun CategoryRail(
             .background(MaterialTheme.colorScheme.background),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -190,13 +193,16 @@ fun CategoryRail(
                         fontFamily = FontFamily.Monospace,
                         fontSize = MaterialTheme.typography.bodyMedium.fontSize,
                         fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                        letterSpacing = 0.3.sp,
+
                         color = if (active) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
-                        modifier = Modifier.padding(start = 11.dp, top = 13.dp, bottom = 13.dp, end = 14.dp),
+                        // Было 13 — девять строк по такой высоте не помещались
+                        // в альбомный экран и требовали прокрутки ради двух
+                        // последних пунктов.
+                        modifier = Modifier.padding(start = 11.dp, top = 9.dp, bottom = 9.dp, end = 14.dp),
                     )
                 }
                 if (index != items.lastIndex) {
@@ -236,8 +242,7 @@ fun CategoryHome(
                         BrixNavRow(stringResource(R.string.settings_stream_profiles), divider = true, onClick = { onRoute(SettingsRoute.StreamProfiles) })
                         BrixNavRow(stringResource(R.string.settings_scenes), divider = true, onClick = { onRoute(SettingsRoute.Scenes) })
                         BrixNavRow(stringResource(R.string.settings_channel_priorities), divider = true, onClick = { onRoute(SettingsRoute.ChannelPriorities) })
-                        BrixNavRow(stringResource(R.string.settings_overlays), divider = true, onClick = { onRoute(SettingsRoute.Overlay) })
-                        BrixNavRow(stringResource(R.string.settings_browser_widgets), divider = false, onClick = { onRoute(SettingsRoute.BrowserWidgets) })
+                        BrixNavRow(stringResource(R.string.settings_widgets), divider = false, onClick = { onRoute(SettingsRoute.Widgets) })
                     }
                 }
             }
@@ -954,26 +959,25 @@ fun StreamProfilesScreen(
         }
     }
     if (pendingDelete != null) {
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(stringResource(R.string.dialog_delete_profile_title)) },
-            text = if (pendingDelete == "last") {
-                { Text(stringResource(R.string.dialog_delete_profile_last)) }
-            } else null,
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete?.let { if (it != "last") viewModel.deleteStreamProfile(it) }
-                    pendingDelete = null
-                }) {
-                    Text(stringResource(R.string.btn_delete))
-                }
+        BrixDialog(
+            title = stringResource(R.string.dialog_delete_profile_title),
+            onDismiss = { pendingDelete = null },
+            dismissLabel = stringResource(R.string.btn_cancel),
+            confirmLabel = stringResource(R.string.btn_delete),
+            destructive = true,
+            onConfirm = {
+                pendingDelete?.let { if (it != "last") viewModel.deleteStreamProfile(it) }
+                pendingDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) {
-                    Text(stringResource(R.string.btn_cancel))
-                }
-            },
-        )
+        ) {
+            if (pendingDelete == "last") {
+                Text(
+                    text = stringResource(R.string.dialog_delete_profile_last),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -1030,26 +1034,25 @@ fun ServerProfilesScreen(
     }
     if (pendingDelete != null) {
         val (server, isLastEnabled) = pendingDelete!!
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(stringResource(R.string.dialog_delete_server_title)) },
-            text = if (isLastEnabled) {
-                { Text(stringResource(R.string.dialog_delete_server_last_enabled)) }
-            } else null,
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.deleteServerProfile(server.id)
-                    pendingDelete = null
-                }) {
-                    Text(stringResource(R.string.btn_delete))
-                }
+        BrixDialog(
+            title = stringResource(R.string.dialog_delete_server_title),
+            onDismiss = { pendingDelete = null },
+            dismissLabel = stringResource(R.string.btn_cancel),
+            confirmLabel = stringResource(R.string.btn_delete),
+            destructive = true,
+            onConfirm = {
+                viewModel.deleteServerProfile(server.id)
+                pendingDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) {
-                    Text(stringResource(R.string.btn_cancel))
-                }
-            },
-        )
+        ) {
+            if (isLastEnabled) {
+                Text(
+                    text = stringResource(R.string.dialog_delete_server_last_enabled),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -1697,274 +1700,55 @@ internal fun ProfileRow(
     }
 }
 
+/**
+ * Единый список виджетов сцены.
+ *
+ * Раньше здесь было два экрана — «Оверлеи» и «Браузерные виджеты», — и разница
+ * между ними была нашей внутренней, а не смысловой для человека: один
+ * браузерный виджет доната клался в первый список, другой во второй (владелец,
+ * 14.09). Теперь список один, а вид вещи задаётся типом при создании.
+ */
 @Composable
-fun OverlaySettingsScreen(
+fun WidgetsSettingsScreen(
     viewModel: SettingsViewModel,
-    onEdit: (String?) -> Unit,
-    onPlaceOverlay: (String) -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val settings by viewModel.settings.collectAsState()
-    var pendingDelete by remember { mutableStateOf<String?>(null) }
-
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = { SettingsTopBar(crumb(R.string.settings_stream, R.string.settings_overlays), onBack) },
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding.verticalOnly())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-        ) {
-            if (settings.overlays.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.overlay_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-            } else {
-                BrixCard {
-                    settings.overlays.forEachIndexed { index, overlay ->
-                        OverlayRow(
-                            overlay = overlay,
-                            onToggle = { viewModel.saveOverlay(overlay.copy(enabled = it)) },
-                            onEdit = { onEdit(overlay.id) },
-                            onPlace = { onPlaceOverlay(overlay.id) },
-                            onDelete = { pendingDelete = overlay.id },
-                        )
-                        if (index != settings.overlays.lastIndex) {
-                            HorizontalDivider(
-                                thickness = 0.5.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant,
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-            FilledTonalButton(
-                onClick = { onEdit(null) },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.btn_add))
-            }
-        }
-    }
-    if (pendingDelete != null) {
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(stringResource(R.string.dialog_delete_overlay_title)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete?.let { viewModel.deleteOverlay(it) }
-                    pendingDelete = null
-                }) {
-                    Text(stringResource(R.string.btn_delete))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) {
-                    Text(stringResource(R.string.btn_cancel))
-                }
-            },
-        )
-    }
-}
-
-@Composable
-private fun OverlayRow(
-    overlay: OverlayConfig,
-    onToggle: (Boolean) -> Unit,
-    onEdit: () -> Unit,
-    onPlace: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 11.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BrixToggle(checked = overlay.enabled, onCheckedChange = onToggle)
-        Spacer(Modifier.width(12.dp))
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .clickable(onClick = onEdit),
-        ) {
-            Text(
-                text = overlay.url,
-                style = MaterialTheme.typography.titleMedium,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = if (overlay.enabled) {
-                    stringResource(R.string.settings_enabled)
-                } else {
-                    stringResource(R.string.settings_disabled)
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        IconButton(onClick = onPlace) {
-            Icon(
-                imageVector = Icons.Filled.OpenWith,
-                contentDescription = stringResource(R.string.overlay_change_position),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        IconButton(onClick = onDelete) {
-            Icon(
-                imageVector = Icons.Filled.Delete,
-                contentDescription = stringResource(R.string.btn_delete),
-                tint = MaterialTheme.colorScheme.error,
-            )
-        }
-    }
-}
-
-@Composable
-fun OverlayEditScreen(
-    viewModel: SettingsViewModel,
-    overlayId: String?,
-    onNext: (String) -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val settings by viewModel.settings.collectAsState()
-    val overlay = overlayId?.let { id -> settings.overlays.firstOrNull { it.id == id } }
-
-    var url by rememberSaveable { mutableStateOf(overlay?.url ?: "") }
-    var audioOnDevice by rememberSaveable { mutableStateOf(overlay?.audioOnDevice ?: false) }
-    var audioInStream by rememberSaveable { mutableStateOf(overlay?.audioInStream ?: false) }
-
-    val base = overlay ?: newOverlay(url)
-    val draft = base.copy(
-        url = url,
-        audioOnDevice = audioOnDevice,
-        audioInStream = audioInStream,
-    )
-
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = {
-            SettingsEditTopBar(
-                title = if (overlayId == null) {
-                    stringResource(R.string.overlay_add_title)
-                } else {
-                    stringResource(R.string.settings_overlay)
-                },
-                onCancel = onBack,
-                onSave = {
-                    viewModel.saveOverlay(draft)
-                    if (overlayId == null) onNext(draft.id) else onBack()
-                },
-                saveLabel = stringResource(if (overlayId == null) R.string.btn_next else R.string.btn_save),
-                saveEnabled = url.isNotBlank(),
-            )
-        },
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding.verticalOnly())
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            BrixCard {
-                Text(
-                    text = stringResource(R.string.overlay_section),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text(stringResource(R.string.field_overlay_url)) },
-                    placeholder = { Text("https://...") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = stringResource(R.string.overlay_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            BrixCard {
-                Text(
-                    text = stringResource(R.string.overlay_audio_title),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(Modifier.height(4.dp))
-                BrixToggleRow(
-                    title = stringResource(R.string.overlay_audio_device),
-                    checked = audioOnDevice,
-                    divider = true,
-                ) {
-                    audioOnDevice = it
-                }
-                BrixToggleRow(
-                    title = stringResource(R.string.overlay_audio_stream),
-                    checked = audioInStream,
-                    divider = false,
-                ) {
-                    audioInStream = it
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun BrowserWidgetSettingsScreen(
-    viewModel: SettingsViewModel,
-    onEdit: (String?) -> Unit,
+    onEdit: (widgetId: String?, newKind: WidgetKind?) -> Unit,
     onPlaceWidget: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val settings by viewModel.settings.collectAsState()
     var pendingDelete by remember { mutableStateOf<String?>(null) }
+    var pickKind by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = { SettingsTopBar(crumb(R.string.settings_stream, R.string.settings_browser_widgets), onBack) },
+        topBar = { SettingsTopBar(crumb(R.string.settings_stream, R.string.settings_widgets), onBack) },
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .padding(innerPadding.verticalOnly())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
-            if (settings.browserWidgets.isEmpty()) {
+            if (settings.widgets.isEmpty()) {
                 Text(
-                    text = stringResource(R.string.browser_widget_hint),
+                    text = stringResource(R.string.widget_hint_empty),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
             } else {
                 BrixCard {
-                    settings.browserWidgets.forEachIndexed { index, widget ->
-                        BrowserWidgetRow(
+                    settings.widgets.forEachIndexed { index, widget ->
+                        WidgetRow(
                             widget = widget,
-                            onToggle = { viewModel.saveBrowserWidget(widget.copy(enabled = it)) },
-                            onEdit = { onEdit(widget.id) },
+                            inAnyScene = settings.scenes.isEmpty() ||
+                                settings.scenes.any { widget.id in it.widgetIds },
+                            onToggle = { viewModel.saveWidget(widget.copy(enabled = it)) },
+                            onEdit = { onEdit(widget.id, null) },
                             onPlace = { onPlaceWidget(widget.id) },
                             onDelete = { pendingDelete = widget.id },
                         )
-                        if (index != settings.browserWidgets.lastIndex) {
+                        if (index != settings.widgets.lastIndex) {
                             HorizontalDivider(
                                 thickness = 0.5.dp,
                                 color = MaterialTheme.colorScheme.outlineVariant,
@@ -1975,37 +1759,100 @@ fun BrowserWidgetSettingsScreen(
                 Spacer(Modifier.height(8.dp))
             }
             FilledTonalButton(
-                onClick = { onEdit(null) },
+                onClick = { pickKind = true },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.btn_add))
             }
         }
     }
+    if (pickKind) {
+        // Телефон в эфире держат горизонтально, и высоты почти нет: четыре типа
+        // с пояснениями не помещались — «Текст» не было видно вовсе, а описание
+        // «Картинки» обрезалось на полуслове (владелец, 15.09). Отсюда и
+        // прокрутка, и компактный диалог вместо материального.
+        BrixDialog(
+            title = stringResource(R.string.widget_pick_kind),
+            onDismiss = { pickKind = false },
+            confirmLabel = stringResource(R.string.btn_cancel),
+            onConfirm = { pickKind = false },
+        ) {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                WidgetKind.entries.forEach { kind ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                pickKind = false
+                                onEdit(null, kind)
+                            }
+                            .padding(vertical = 6.dp),
+                    ) {
+                        Text(
+                            text = stringResource(widgetKindLabel(kind)),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            text = stringResource(widgetKindHint(kind)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
     if (pendingDelete != null) {
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(stringResource(R.string.dialog_delete_browser_widget_title)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete?.let { viewModel.deleteBrowserWidget(it) }
-                    pendingDelete = null
-                }) {
-                    Text(stringResource(R.string.btn_delete))
-                }
+        // Раньше диалог спрашивал «Удалить виджет?» и не говорил, какой именно,
+        // а обе кнопки выглядели одинаково (владелец, 15.09).
+        val doomed = settings.widgets.firstOrNull { it.id == pendingDelete }
+        BrixDialog(
+            title = stringResource(R.string.dialog_delete_widget_title),
+            onDismiss = { pendingDelete = null },
+            dismissLabel = stringResource(R.string.btn_cancel),
+            confirmLabel = stringResource(R.string.btn_delete),
+            destructive = true,
+            onConfirm = {
+                pendingDelete?.let { viewModel.deleteWidget(it) }
+                pendingDelete = null
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) {
-                    Text(stringResource(R.string.btn_cancel))
-                }
-            },
-        )
+        ) {
+            if (doomed != null) {
+                Text(
+                    text = stringResource(
+                        R.string.dialog_delete_widget_text,
+                        stringResource(widgetKindLabel(doomed.kind)),
+                        doomed.displayTitle(),
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
+internal fun widgetKindLabel(kind: WidgetKind): Int = when (kind) {
+    WidgetKind.DONATION_ALERT -> R.string.widget_kind_donation
+    WidgetKind.WEB -> R.string.widget_kind_web
+    WidgetKind.IMAGE -> R.string.widget_kind_image
+    WidgetKind.TEXT -> R.string.widget_kind_text
+}
+
+private fun widgetKindHint(kind: WidgetKind): Int = when (kind) {
+    WidgetKind.DONATION_ALERT -> R.string.widget_kind_donation_hint
+    WidgetKind.WEB -> R.string.widget_kind_web_hint
+    WidgetKind.IMAGE -> R.string.widget_kind_image_hint
+    WidgetKind.TEXT -> R.string.widget_kind_text_hint
+}
+
 @Composable
-private fun BrowserWidgetRow(
-    widget: BrowserWidgetConfig,
+private fun WidgetRow(
+    widget: SceneWidget,
+    /** Входит ли виджет хотя бы в одну сцену. Если нет — он не работает вовсе,
+     *  и об этом надо сказать вслух: включённый виджет вне сцен молча ничего не
+     *  делает, а человек считает, что настроил (владелец, 14.09). */
+    inAnyScene: Boolean,
     onToggle: (Boolean) -> Unit,
     onEdit: () -> Unit,
     onPlace: () -> Unit,
@@ -2025,21 +1872,27 @@ private fun BrowserWidgetRow(
                 .clickable(onClick = onEdit),
         ) {
             Text(
-                text = widget.url,
+                text = widget.displayTitle().ifBlank { stringResource(widgetKindLabel(widget.kind)) },
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // Тип в подписи, а не значком: значок пришлось бы объяснять, а
+            // строка «Донат-алерт · включён» читается без легенды.
             Text(
-                text = if (widget.enabled) {
-                    stringResource(R.string.settings_enabled)
-                } else {
-                    stringResource(R.string.settings_disabled)
+                text = stringResource(widgetKindLabel(widget.kind)) + " · " + when {
+                    !widget.enabled -> stringResource(R.string.settings_disabled)
+                    !inAnyScene -> stringResource(R.string.overlay_no_scene)
+                    else -> stringResource(R.string.settings_enabled)
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (widget.enabled && !inAnyScene) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
         }
         IconButton(onClick = onPlace) {
@@ -2059,46 +1912,88 @@ private fun BrowserWidgetRow(
     }
 }
 
+/** Форма одного виджета. Поля показываются по типу — общего у всех только имя. */
 @Composable
-fun BrowserWidgetEditScreen(
+fun WidgetEditScreen(
     viewModel: SettingsViewModel,
     widgetId: String?,
+    newKind: WidgetKind?,
     onNext: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val settings by viewModel.settings.collectAsState()
-    val widget = widgetId?.let { id -> settings.browserWidgets.firstOrNull { it.id == id } }
+    val existing = widgetId?.let { id -> settings.widgets.firstOrNull { it.id == id } }
+    val kind = existing?.kind ?: newKind ?: WidgetKind.DONATION_ALERT
 
-    var url by rememberSaveable { mutableStateOf(widget?.url ?: "") }
-    var refresh by rememberSaveable { mutableStateOf((widget?.refreshMs ?: 200L).toString()) }
+    var name by rememberSaveable { mutableStateOf(existing?.name ?: "") }
+    var url by rememberSaveable { mutableStateOf(existing?.url ?: "") }
+    var audioOnDevice by rememberSaveable { mutableStateOf(existing?.audioOnDevice ?: false) }
+    var audioInStream by rememberSaveable { mutableStateOf(existing?.audioInStream ?: false) }
+    var captionScale by rememberSaveable { mutableStateOf(existing?.captionScale ?: 1f) }
+    var captionVisible by rememberSaveable { mutableStateOf(existing?.captionVisible ?: true) }
+    var refresh by rememberSaveable { mutableStateOf((existing?.refreshMs ?: 200L).toString()) }
+    var imageUri by rememberSaveable { mutableStateOf(existing?.imageUri ?: "") }
+    var template by rememberSaveable { mutableStateOf(existing?.template ?: "") }
+    var textScale by rememberSaveable { mutableStateOf(existing?.textScale ?: 1f) }
 
-    val base = widget ?: newBrowserWidget(url)
+    val context = LocalContext.current
+    val pickImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            // Разрешение переживает перезагрузку: без него URI читается только
+            // до конца процесса, и картинка пропадает из кадра после перезапуска.
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            imageUri = uri.toString()
+        }
+    }
+
+    val base = existing ?: newWidget(kind)
     val draft = base.copy(
+        kind = kind,
+        name = name,
         url = url,
-        // Поле работало (StreamScreen.kt: delay(widget.refreshMs)), но задать
-        // его было негде. Нижняя граница нужна, чтобы нельзя было случайно
-        // попросить снимок WebView каждые пару миллисекунд: это покадровая
-        // работа в GL-тракте, а не бесплатное число в настройке.
+        audioOnDevice = audioOnDevice,
+        audioInStream = audioInStream,
+        captionScale = captionScale,
+        captionVisible = captionVisible,
+        // Нижняя граница нужна, чтобы нельзя было случайно попросить снимок
+        // WebView каждые пару миллисекунд: это покадровая работа в GL-тракте,
+        // а не бесплатное число в настройке.
         refreshMs = refresh.toLongOrNull()?.coerceIn(50L, 5_000L) ?: base.refreshMs,
+        imageUri = imageUri,
+        template = template,
+        textScale = textScale,
     )
+
+    val filled = when (kind) {
+        WidgetKind.DONATION_ALERT, WidgetKind.WEB -> url.isNotBlank()
+        WidgetKind.IMAGE -> imageUri.isNotBlank()
+        WidgetKind.TEXT -> template.isNotBlank()
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
             SettingsEditTopBar(
                 title = if (widgetId == null) {
-                    stringResource(R.string.browser_widget_add_title)
+                    stringResource(R.string.widget_add_title)
                 } else {
-                    stringResource(R.string.settings_browser_widgets)
+                    stringResource(widgetKindLabel(kind))
                 },
                 onCancel = onBack,
                 onSave = {
-                    viewModel.saveBrowserWidget(draft)
+                    viewModel.saveWidget(draft)
                     if (widgetId == null) onNext(draft.id) else onBack()
                 },
                 saveLabel = stringResource(if (widgetId == null) R.string.btn_next else R.string.btn_save),
-                saveEnabled = url.isNotBlank(),
+                saveEnabled = filled,
             )
         },
     ) { innerPadding ->
@@ -2109,37 +2004,161 @@ fun BrowserWidgetEditScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Заголовка с типом внутри карточки нет намеренно: тип уже написан
+            // в шапке экрана, и вторая такая же надпись читалась как вопрос
+            // «а это про что?» (владелец, 15.09). BrixCard задаёт только
+            // боковые поля, поэтому вертикальные добавляем здесь — иначе
+            // подсказка внизу упирается в самый край скругления.
             BrixCard {
-                Text(
-                    text = stringResource(R.string.browser_widget_section),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text(stringResource(R.string.field_browser_widget_url)) },
-                    placeholder = { Text("https://...") },
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(stringResource(R.string.field_widget_name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = refresh,
-                    onValueChange = { refresh = it.filter(Char::isDigit) },
-                    label = { Text(stringResource(R.string.field_widget_refresh)) },
-                    supportingText = { Text(stringResource(R.string.field_widget_refresh_hint)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                when (kind) {
+                    WidgetKind.DONATION_ALERT, WidgetKind.WEB -> {
+                        OutlinedTextField(
+                            value = url,
+                            onValueChange = { url = it },
+                            label = {
+                                Text(
+                                    stringResource(
+                                        if (kind == WidgetKind.DONATION_ALERT) {
+                                            R.string.field_overlay_url
+                                        } else {
+                                            R.string.field_browser_widget_url
+                                        },
+                                    ),
+                                )
+                            },
+                            placeholder = { Text("https://...") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (kind == WidgetKind.WEB) {
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = refresh,
+                                onValueChange = { refresh = it.filter(Char::isDigit) },
+                                label = { Text(stringResource(R.string.field_widget_refresh)) },
+                                supportingText = { Text(stringResource(R.string.field_widget_refresh_hint)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+
+                    WidgetKind.IMAGE -> {
+                        Text(
+                            text = imageUri.ifBlank { stringResource(R.string.field_widget_image) },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        FilledTonalButton(onClick = { pickImage.launch(arrayOf("image/*")) }) {
+                            Text(stringResource(R.string.btn_pick_file))
+                        }
+                    }
+
+                    WidgetKind.TEXT -> {
+                        OutlinedTextField(
+                            value = template,
+                            onValueChange = { template = it },
+                            label = { Text(stringResource(R.string.field_widget_text)) },
+                            supportingText = { Text(stringResource(R.string.widget_text_hint)) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.widget_text_scale, (textScale * 100).toInt()),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Slider(
+                            value = textScale,
+                            onValueChange = { textScale = it },
+                            valueRange = 0.5f..3f,
+                            steps = 24,
+                        )
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = stringResource(R.string.browser_widget_hint),
+                    text = stringResource(widgetKindHint(kind)),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Spacer(Modifier.height(12.dp))
+            }
+
+            if (kind == WidgetKind.DONATION_ALERT) {
+                BrixCard {
+                    Text(
+                        text = stringResource(R.string.overlay_audio_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    BrixToggleRow(
+                        title = stringResource(R.string.overlay_audio_device),
+                        checked = audioOnDevice,
+                        divider = true,
+                    ) {
+                        audioOnDevice = it
+                    }
+                    BrixToggleRow(
+                        title = stringResource(R.string.overlay_audio_stream),
+                        checked = audioInStream,
+                        divider = false,
+                    ) {
+                        audioInStream = it
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                // Подпись — имя, сумма, сообщение. Раньше её размер выводился из
+                // ширины картинки, и менять текст приходилось размером окна наугад.
+                BrixCard {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            text = stringResource(R.string.overlay_caption_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        // Выбора «сверху или снизу» нет намеренно: порядок в
+                        // донат-алерте устоявшийся, и ручка, которая его ломает, —
+                        // не гибкость. Только «показывать или нет».
+                        BrixToggleRow(
+                            title = stringResource(R.string.overlay_caption_show),
+                            checked = captionVisible,
+                            divider = true,
+                        ) { captionVisible = it }
+                        if (captionVisible) {
+                            Text(
+                                text = stringResource(
+                                    R.string.overlay_caption_scale,
+                                    (captionScale * 100).toInt(),
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Slider(
+                                value = captionScale,
+                                onValueChange = { captionScale = it },
+                                valueRange = 0.5f..3f,
+                                steps = 24,
+                            )
+                        }
+                    }
+                }
             }
         }
     }

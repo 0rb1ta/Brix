@@ -96,7 +96,11 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
 import app.brix.core.AppSettings
+import app.brix.core.WidgetKind
 import app.brix.core.ButtonAction
 import app.brix.core.MicSource
 import app.brix.core.QuickButtonConfig
@@ -150,8 +154,11 @@ private fun routeSaver(): androidx.compose.runtime.saveable.Saver<SettingsRoute,
                 is SettingsRoute.StreamProfileEdit -> "StreamProfileEdit:" + (r.profileId ?: "")
                 is SettingsRoute.SceneEdit -> "SceneEdit:" + (r.sceneId ?: "")
                 is SettingsRoute.ServerProfileEdit -> "ServerProfileEdit:" + (r.profileId ?: "")
-                is SettingsRoute.OverlayEdit -> "OverlayEdit:" + (r.overlayId ?: "")
-                is SettingsRoute.BrowserWidgetEdit -> "BrowserWidgetEdit:" + (r.widgetId ?: "")
+                // У создания идентификатора ещё нет, зато есть выбранный тип —
+                // кладём его в то же поле с префиксом, чтобы саверу хватило
+                // одной строки и не пришлось заводить второй ключ.
+                is SettingsRoute.WidgetEdit ->
+                    "WidgetEdit:" + (r.widgetId ?: r.newKind?.let { "new." + it.name } ?: "")
                 else -> r::class.simpleName ?: "Menu"
             }
         },
@@ -173,18 +180,29 @@ private fun routeSaver(): androidx.compose.runtime.saveable.Saver<SettingsRoute,
                 "Advanced" -> SettingsRoute.Advanced
                 "About" -> SettingsRoute.About
                 "Diagnostics" -> SettingsRoute.Diagnostics
-                "BrowserWidgets" -> SettingsRoute.BrowserWidgets
+                "Widgets" -> SettingsRoute.Widgets
                 "StreamProfileEdit" -> SettingsRoute.StreamProfileEdit(id)
                 "ServerProfileEdit" -> SettingsRoute.ServerProfileEdit(id)
-                "OverlayEdit" -> SettingsRoute.OverlayEdit(id)
-                "BrowserWidgetEdit" -> SettingsRoute.BrowserWidgetEdit(id)
+                "WidgetEdit" -> if (id != null && id.startsWith("new.")) {
+                    SettingsRoute.WidgetEdit(null, runCatching { WidgetKind.valueOf(id.removePrefix("new.")) }.getOrNull())
+                } else {
+                    SettingsRoute.WidgetEdit(id)
+                }
                 else -> SettingsRoute.Menu
             }
         },
     )
 
 @Composable
-fun StreamScreen(settings: AppSettings, settingsViewModel: SettingsViewModel, modifier: Modifier = Modifier) {
+fun StreamScreen(
+    settings: AppSettings,
+    settingsViewModel: SettingsViewModel,
+    /** Доиграла ли заставка. Пока нет — камеру не трогаем вовсе: заставка
+     *  портретная, а эфирный экран альбомный, и камера, поднятая в портрете,
+     *  после разворота отдавала вертикальную картинку (владелец, 15.09). */
+    introDone: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
     val enabledServers = settings.enabledServers()
     var selectedServerId by rememberSaveable {
         mutableStateOf(enabledServers.firstOrNull()?.id ?: "")
@@ -196,27 +214,19 @@ fun StreamScreen(settings: AppSettings, settingsViewModel: SettingsViewModel, mo
         stateSaver = routeSaver(),
     ) { mutableStateOf<SettingsRoute>(SettingsRoute.Menu) }
     var settingsCategory by rememberSaveable { mutableStateOf(SettingsCategory.STREAM) }
-    // Placement mode: settings panel is closed and the stream screen shows a
-    // single draggable/resizable box for this overlay id, over the live
-    // camera preview. Entered from the overlay create-wizard's "Next" step
-    // and from "Change position" in the overlay list.
-    var placementOverlayId by rememberSaveable { mutableStateOf<String?>(null) }
-    // Same placement flow, for the separate Browser-widget list (round 7) —
-    // kept as its own state rather than reusing placementOverlayId so "done"
-    // returns to the correct list screen (Overlay vs BrowserWidgets).
+    // Режим размещения: панель настроек закрыта, поверх живого превью показана
+    // одна рамка виджета. Состояние ОДНО на все типы: раньше их было два —
+    // отдельное для оверлеев и отдельное для браузерных виджетов, — только
+    // потому что списка было два и «готово» должно было вернуть в правильный.
+    // Список теперь один, и вторая копия стала лишней.
     var placementWidgetId by rememberSaveable { mutableStateOf<String?>(null) }
 
-    // Back closes placement mode (returning to the overlay list), then the
+    // Back closes placement mode (returning to the widget list), then the
     // settings panel, before finishing the Activity (H14).
-    BackHandler(enabled = placementOverlayId != null) {
-        placementOverlayId = null
-        showSettings = true
-        settingsRoute = SettingsRoute.Overlay
-    }
     BackHandler(enabled = placementWidgetId != null) {
         placementWidgetId = null
         showSettings = true
-        settingsRoute = SettingsRoute.BrowserWidgets
+        settingsRoute = SettingsRoute.Widgets
     }
     BackHandler(enabled = showSettings) { showSettings = false }
 
@@ -287,30 +297,27 @@ fun StreamScreen(settings: AppSettings, settingsViewModel: SettingsViewModel, mo
                     // Сцена решает, что показывать. Пока сцен нет — прежнее
                     // поведение: показываем всё включённое. Так включение сцен
                     // не ломает настройку тем, кто ими не пользуется.
+                    introDone = introDone,
                     overlays = settings.activeOverlays(),
-                    placementOverlayId = placementOverlayId,
+                    // Размещаемый ищется по ПОЛНОМУ списку, а не по активным:
+                    // activeOverlays() отдаёт только оверлеи выбранной сцены, и
+                    // «изменить положение» для оверлея из другой сцены не находил
+                    // ничего — настройки закрывались, рамка не появлялась, и это
+                    // выглядело как «выкинуло на главный экран» (владелец, 14.09).
                     browserWidgets = settings.activeBrowserWidgets(),
-                    placementWidgetId = placementWidgetId,
+                    imageWidgets = settings.activeWidgets().filter { it.kind == WidgetKind.IMAGE },
+                    textWidgets = settings.activeWidgets().filter { it.kind == WidgetKind.TEXT },
+                    placementWidget = placementWidgetId?.let { id ->
+                        settings.widgets.firstOrNull { it.id == id }
+                    },
                     onOpenSettings = {
                         settingsRoute = SettingsRoute.Menu
                         showSettings = true
                     },
                     onConfigChange = { settingsViewModel.updateQuickButtons(it) },
-                    onOverlayChange = { id, px, py, w, h ->
-                        settings.overlays.firstOrNull { it.id == id }?.let { overlay ->
-                            settingsViewModel.saveOverlay(
-                                overlay.copy(posX = px, posY = py, width = w, height = h),
-                            )
-                        }
-                    },
-                    onPlacementDone = {
-                        placementOverlayId = null
-                        showSettings = true
-                        settingsRoute = SettingsRoute.Overlay
-                    },
                     onWidgetChange = { id, px, py, w, h ->
-                        settings.browserWidgets.firstOrNull { it.id == id }?.let { widget ->
-                            settingsViewModel.saveBrowserWidget(
+                        settings.widgets.firstOrNull { it.id == id }?.let { widget ->
+                            settingsViewModel.saveWidget(
                                 widget.copy(posX = px, posY = py, width = w, height = h),
                             )
                         }
@@ -318,7 +325,7 @@ fun StreamScreen(settings: AppSettings, settingsViewModel: SettingsViewModel, mo
                     onWidgetPlacementDone = {
                         placementWidgetId = null
                         showSettings = true
-                        settingsRoute = SettingsRoute.BrowserWidgets
+                        settingsRoute = SettingsRoute.Widgets
                     },
                     onChatChange = { settingsViewModel.updateChat(it) },
                 )
@@ -341,10 +348,6 @@ fun StreamScreen(settings: AppSettings, settingsViewModel: SettingsViewModel, mo
                     onRoute = { settingsRoute = it },
                     onCategoryChange = { settingsCategory = it },
                     onClose = { showSettings = false },
-                    onPlaceOverlay = { id ->
-                        showSettings = false
-                        placementOverlayId = id
-                    },
                     onPlaceWidget = { id ->
                         showSettings = false
                         placementWidgetId = id
@@ -390,14 +393,21 @@ private fun ImmersiveStream(
     autoHideHud: Boolean,
     hud: app.brix.core.HudConfig,
     chat: app.brix.core.ChatSettings,
+    /** См. одноимённый параметр [StreamScreen]. */
+    introDone: Boolean,
     overlays: List<app.brix.core.OverlayConfig>,
-    placementOverlayId: String?,
     browserWidgets: List<app.brix.core.BrowserWidgetConfig>,
-    placementWidgetId: String?,
+    /** Картинки — рисуются нативно, без WebView. */
+    imageWidgets: List<app.brix.core.SceneWidget>,
+    /** Текст с подстановками — тоже нативно. */
+    textWidgets: List<app.brix.core.SceneWidget>,
+    /** Виджет, который сейчас размещают. Ищется по ПОЛНОМУ списку, а не по
+     *  активным: «изменить положение» для виджета из другой сцены иначе не
+     *  находит ничего, настройки закрываются, рамка не появляется — и это
+     *  выглядит как «выкинуло на главный экран» (владелец, 14.09). */
+    placementWidget: app.brix.core.SceneWidget?,
     onOpenSettings: () -> Unit,
     onConfigChange: (QuickButtonConfig) -> Unit,
-    onOverlayChange: (id: String, posX: Float, posY: Float, width: Float, height: Float) -> Unit,
-    onPlacementDone: () -> Unit,
     onWidgetChange: (id: String, posX: Float, posY: Float, width: Float, height: Float) -> Unit,
     onWidgetPlacementDone: () -> Unit,
     onChatChange: (app.brix.core.ChatSettings) -> Unit,
@@ -422,6 +432,16 @@ private fun ImmersiveStream(
     browserWidgets.forEach { widget ->
         key(widget.id) {
             BrowserWidgetHost(widget = widget, context = context, streamer = streamer, shown = overlayShown)
+        }
+    }
+    imageWidgets.forEach { widget ->
+        key(widget.id) {
+            ImageWidgetHost(widget = widget, context = context, streamer = streamer, shown = overlayShown)
+        }
+    }
+    textWidgets.forEach { widget ->
+        key(widget.id) {
+            TextWidgetHost(widget = widget, context = context, streamer = streamer, shown = overlayShown, state = state)
         }
     }
 
@@ -667,6 +687,15 @@ private fun ImmersiveStream(
         if (hudPinned) add(ButtonAction.INFO)
         if (powerSaveOn) add(ButtonAction.POWER_SAVE)
     }
+    // Ответ на нажатие «Снимок»: без него кнопка молчит, и непонятно, снялось
+    // ли что-нибудь. Строка гаснет сама.
+    var snapshotMessage by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(snapshotMessage) {
+        if (snapshotMessage != null) {
+            kotlinx.coroutines.delay(2500)
+            snapshotMessage = null
+        }
+    }
     var hudExpanded by remember { mutableStateOf(false) }
     var uiLocked by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
@@ -766,7 +795,13 @@ private fun ImmersiveStream(
         requestNotifications()
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(introDone) {
+        // Ждём конца заставки. prepare() поднимает камеру, GL-цепочку и
+        // энкодер, а ориентацию они берут в момент запуска: сделанное в
+        // портрете остаётся портретным и после разворота в альбом — та самая
+        // «горизонтальная страница с вертикальной камерой». Заставка всё равно
+        // закрывает экран целиком, так что ничего не теряется.
+        if (!introDone) return@LaunchedEffect
         if (profile != null) streamer.configure(profile, server.latencyMs)
         streamer.configureMoblink(moblink)
         (streamer as? app.brix.streaming.SrtlaStreamer)?.setPreferIpv4(server.preferIpv4)
@@ -834,6 +869,16 @@ private fun ImmersiveStream(
             }
             ButtonAction.MASCOT -> Unit // purely decorative, no tap action
             ButtonAction.POWER_SAVE -> { powerSaveOn = !powerSaveOn }
+            // Снимок берётся из GL-цепочки, то есть это кадр ЭФИРА — с
+            // оверлеями и эффектами, ровно то, что видит зритель. Отдельный
+            // фотоснимок с камеры показал бы другое изображение и сбивал бы
+            // с толку при разборе «а что было в кадре».
+            ButtonAction.SNAPSHOT -> {
+                streamer.takeSnapshot { bitmap ->
+                    val uri = bitmap?.let { saveSnapshotToGallery(context, it) }
+                    snapshotMessage = if (uri != null) R.string.snapshot_saved else R.string.snapshot_failed
+                }
+            }
             // Перебираем то, что подключено сейчас, а не весь enum: гарнитуру
             // втыкают и вынимают посреди эфира, и предлагать отсутствующее
             // устройство значило бы оставить стримера без звука.
@@ -1044,37 +1089,6 @@ private fun ImmersiveStream(
                 )
             }
 
-            val placementOverlay = overlays.firstOrNull { it.id == placementOverlayId }
-            if (placementOverlay != null) {
-                OverlayTuner(
-                    posX = placementOverlay.posX,
-                    posY = placementOverlay.posY,
-                    widthFraction = placementOverlay.width,
-                    heightFraction = placementOverlay.height,
-                    onMove = { px, py, w, h -> onOverlayChange(placementOverlay.id, px, py, w, h) },
-                )
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        text = stringResource(R.string.overlay_tune_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White,
-                        modifier = Modifier
-                            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Button(onClick = onPlacementDone) {
-                        Text(stringResource(R.string.btn_done))
-                    }
-                }
-            }
-
-            val placementWidget = browserWidgets.firstOrNull { it.id == placementWidgetId }
             if (placementWidget != null) {
                 OverlayTuner(
                     posX = placementWidget.posX,
@@ -1082,8 +1096,14 @@ private fun ImmersiveStream(
                     widthFraction = placementWidget.width,
                     heightFraction = placementWidget.height,
                     onMove = { px, py, w, h -> onWidgetChange(placementWidget.id, px, py, w, h) },
-                    onLiveMove = { px, py, w, h ->
-                        streamer.attachLiveOverlay(placementWidget.id, px, py, app.brix.streaming.overlay.OverlaySize(w, h))
+                    // Живое превью — только у типов с постоянной картинкой.
+                    // У донат-алерта во время настройки показывать нечего.
+                    onLiveMove = if (placementWidget.kind == WidgetKind.DONATION_ALERT) {
+                        { _, _, _, _ -> }
+                    } else {
+                        { px, py, w, h ->
+                            streamer.attachLiveOverlay(placementWidget.id, px, py, app.brix.streaming.overlay.OverlaySize(w, h))
+                        }
                     },
                 )
                 Column(
@@ -1105,6 +1125,19 @@ private fun ImmersiveStream(
                         Text(stringResource(R.string.btn_done))
                     }
                 }
+            }
+
+            snapshotMessage?.let { res ->
+                Text(
+                    text = stringResource(res),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 32.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
             }
 
             if (hudVisible) StatusOverlay(
@@ -1348,6 +1381,8 @@ private fun OverlayHost(
         overlayJsBridge.heightFraction = overlay.height
         overlayJsBridge.audioOnDevice = overlay.audioOnDevice
         overlayJsBridge.audioInStream = overlay.audioInStream
+        overlayJsBridge.captionScale = overlay.captionScale
+        overlayJsBridge.captionVisible = overlay.captionVisible
     }
     LaunchedEffect(overlayController, overlay.enabled, overlay.audioInStream) {
         overlayController.setInStreamMixing(overlay.enabled && overlay.audioInStream)
@@ -1471,6 +1506,173 @@ private fun BrowserWidgetHost(
     }
 }
 
+/**
+ * Картинка поверх видео — БЕЗ WebView.
+ *
+ * Раньше «просто повесить картинку» делалось браузерным виджетом, то есть
+ * стоило целого браузера: замерено 9–10% ядра на виджет при периоде 200 мс,
+ * плюс постоянная пересъёмка. Здесь кадр читается с диска один раз и
+ * отправляется в GL-тракт одним вызовом — периодической работы нет вовсе.
+ */
+@Composable
+private fun ImageWidgetHost(
+    widget: app.brix.core.SceneWidget,
+    context: Context,
+    streamer: LiveStreamer,
+    shown: Boolean,
+) {
+    DisposableEffect(widget.id) {
+        onDispose { streamer.detachLiveOverlay(widget.id) }
+    }
+    LaunchedEffect(widget.imageUri, widget.enabled, shown, widget.posX, widget.posY, widget.width, widget.height) {
+        if (!shown || !widget.enabled || widget.imageUri.isBlank()) {
+            streamer.detachLiveOverlay(widget.id)
+            return@LaunchedEffect
+        }
+        val bitmap = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(android.net.Uri.parse(widget.imageUri)).use { input ->
+                    android.graphics.BitmapFactory.decodeStream(input)
+                }
+            }.getOrNull()
+        }
+        if (bitmap == null) {
+            // Молча пропасть нельзя: URI мог протухнуть вместе с разрешением
+            // (файл удалён, карта вынута), и человеку надо понять, почему в
+            // кадре пусто.
+            android.util.Log.w("Overlay", "виджет-картинка: не читается ${widget.imageUri}")
+            streamer.detachLiveOverlay(widget.id)
+            return@LaunchedEffect
+        }
+        streamer.attachLiveOverlay(
+            widget.id,
+            widget.posX,
+            widget.posY,
+            app.brix.streaming.overlay.OverlaySize(widget.width, widget.height),
+        )
+        streamer.updateLiveOverlayFrame(widget.id, bitmap)
+    }
+}
+
+/**
+ * Текст с подстановками поверх видео — тоже без WebView.
+ *
+ * Перерисовка раз в секунду и только когда строка ДЕЙСТВИТЕЛЬНО изменилась:
+ * шаблон без {time} и {bitrate} рисуется один раз за эфир. Это принципиально
+ * дешевле браузерного виджета, которым такую строку делали раньше.
+ */
+@Composable
+private fun TextWidgetHost(
+    widget: app.brix.core.SceneWidget,
+    context: Context,
+    streamer: LiveStreamer,
+    shown: Boolean,
+    state: app.brix.streaming.StreamState,
+) {
+    DisposableEffect(widget.id) {
+        onDispose { streamer.detachLiveOverlay(widget.id) }
+    }
+    LaunchedEffect(widget.id, widget.enabled, shown, widget.template, widget.textScale, widget.posX, widget.posY, widget.width, widget.height) {
+        if (!shown || !widget.enabled || widget.template.isBlank()) {
+            streamer.detachLiveOverlay(widget.id)
+            return@LaunchedEffect
+        }
+        streamer.attachLiveOverlay(
+            widget.id,
+            widget.posX,
+            widget.posY,
+            app.brix.streaming.overlay.OverlaySize(widget.width, widget.height),
+        )
+        var last: String? = null
+        app.brix.core.diagnostics.PeriodicTasks.register("text-${widget.id.take(4)}", 1000L).use {
+            while (true) {
+                val rendered = substituteWidgetText(widget.template, state, batteryPercent(context))
+                if (rendered != last) {
+                    last = rendered
+                    streamer.updateLiveOverlayFrame(widget.id, renderWidgetText(rendered, widget.textScale))
+                }
+                kotlinx.coroutines.delay(1000L)
+            }
+        }
+    }
+}
+
+/** Подстановки в тексте виджета. Неизвестное имя оставляем как есть — так
+ *  человек видит опечатку в кадре, а не пустоту, и понимает, что исправлять. */
+internal fun substituteWidgetText(
+    template: String,
+    state: app.brix.streaming.StreamState,
+    batteryPercent: Int,
+): String {
+    val time = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+    return template
+        .replace("{time}", time)
+        .replace("{bitrate}", "${state.bitrateKbps} kbps")
+        .replace("{battery}", "$batteryPercent%")
+}
+
+/** Заряд в процентах. BatteryManager отдаёт его синхронно, без приёмника:
+ *  строка перерисовывается раз в секунду, и держать ради этого регистрацию
+ *  broadcast-приёмника незачем. */
+private fun batteryPercent(context: Context): Int =
+    (context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager)
+        ?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0
+
+private fun renderWidgetText(text: String, scale: Float): android.graphics.Bitmap {
+    // Обводка вместо подложки: плашка закрывает кадр прямоугольником, а контур
+    // читается и на светлом, и на тёмном. Так же сделана подпись донат-алерта.
+    val size = 48f * scale.coerceIn(0.5f, 3f)
+    val fill = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = size
+        color = android.graphics.Color.WHITE
+    }
+    val stroke = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = size
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = size / 6f
+        strokeJoin = android.graphics.Paint.Join.ROUND
+        color = android.graphics.Color.BLACK
+    }
+    val pad = (size / 4f).toInt().coerceAtLeast(2)
+    val width = (fill.measureText(text).toInt() + pad * 2).coerceAtLeast(1)
+    val metrics = fill.fontMetrics
+    val height = ((metrics.bottom - metrics.top).toInt() + pad * 2).coerceAtLeast(1)
+    val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val baseline = pad - metrics.top
+    canvas.drawText(text, pad.toFloat(), baseline, stroke)
+    canvas.drawText(text, pad.toFloat(), baseline, fill)
+    return bitmap
+}
+
+/**
+ * Сохраняет снимок в галерею через MediaStore.
+ *
+ * MediaStore, а не свой каталог: на Android 10+ запись в общие «Картинки» не
+ * требует разрешений вовсе, файл сразу виден в галерее, и его не теряют при
+ * удалении приложения — а снимок делают затем, чтобы его кому-то показать.
+ * Возвращает null, если записать не удалось; вызывающий скажет об этом вслух.
+ */
+private fun saveSnapshotToGallery(context: Context, bitmap: android.graphics.Bitmap): android.net.Uri? {
+    val name = "brix-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+        .format(java.util.Date()) + ".jpg"
+    val values = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+        put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+        put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Brix")
+    }
+    val resolver = context.contentResolver
+    return runCatching {
+        val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: return null
+        resolver.openOutputStream(uri).use { out ->
+            if (out == null) return null
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, out)
+        }
+        uri
+    }.onFailure { android.util.Log.w("BrixSnapshot", "снимок не сохранён", it) }.getOrNull()
+}
+
 @Composable
 private fun StatusOverlay(
     state: app.brix.streaming.StreamState,
@@ -1586,7 +1788,15 @@ private fun HudCard(
     val tertiary = MaterialTheme.colorScheme.tertiary
     val warn = MaterialTheme.colorScheme.error
     val border = MaterialTheme.colorScheme.outlineVariant
-    val compact = MaterialTheme.typography.labelSmall
+    // Три роли, а не «на глаз». Владелец, пожелание 4: «шрифт одного размера,
+    // цифры другого, индикаторы линков третьего». До этого в HUD жили вперемешку
+    // labelSmall и labelMedium, три размера значков (12, 13, 14 dp) и цифры тем
+    // же шрифтом, что подписи, — от чего числа при каждом обновлении дёргали
+    // соседей по строке.
+    val hudLabel = HudLabel
+    val compact = hudLabel
+    val hudNumber = HudNumber
+    val hudChannel = HudChannel
     Column(
         modifier = modifier
             .widthIn(max = 520.dp)
@@ -1594,7 +1804,7 @@ private fun HudCard(
             .border(0.5.dp, border, RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onToggleExpand)
-            .padding(8.dp),
+            .padding(horizontal = 8.dp, vertical = 5.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1609,18 +1819,18 @@ private fun HudCard(
                     ),
                 )
                 Spacer(Modifier.width(6.dp))
-                Text("LIVE", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = onSurface)
+                Text("LIVE", style = hudLabel, fontWeight = FontWeight.SemiBold, color = onSurface)
                 if (hud.showUptime) {
                     Spacer(Modifier.width(6.dp))
-                    Text(uptime.removePrefix(" · "), style = compact, color = onSurfaceVariant)
+                    Text(uptime.removePrefix(" · "), style = hudNumber, color = onSurfaceVariant)
                 }
                 // Название сцены рядом со временем, а не в правом блоке: справа
                 // живут числа, за которыми следят непрерывно, и вклинивать между
                 // ними текст переменной длины значило бы дёргать их положение при
                 // каждом переключении сцены.
                 if (hud.showScene && !sceneName.isNullOrBlank()) {
-                    Spacer(Modifier.width(8.dp))
-                    Icon(Icons.Filled.Layers, null, Modifier.size(12.dp), tint = onSurfaceVariant)
+                    Spacer(Modifier.width(HUD_GAP))
+                    Icon(Icons.Filled.Layers, null, Modifier.size(HUD_ICON), tint = onSurfaceVariant)
                     Spacer(Modifier.width(3.dp))
                     Text(
                         sceneName,
@@ -1651,44 +1861,44 @@ private fun HudCard(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (hud.showNetworks && state.connections.isNotEmpty()) {
-                    ChannelBars(state = state, totalBytes = totalBytes, modifier = Modifier.height(14.dp))
-                    Spacer(Modifier.width(6.dp))
+                    ChannelBars(state = state, totalBytes = totalBytes, modifier = Modifier.height(9.dp))
+                    Spacer(Modifier.width(HUD_GAP))
                 }
                 if (bitrateMbps > 0 && hud.showBitrate) {
-                    Text("%.1f Mb".format(java.util.Locale.US, bitrateMbps), style = compact, color = if (bitrateWarn) warn else onSurfaceVariant)
+                    Text("%.1f Mb".format(java.util.Locale.US, bitrateMbps), style = hudNumber, color = if (bitrateWarn) warn else onSurfaceVariant)
                 }
                 if (state.connections.any { it.rtt > 0 }) {
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(HUD_GAP))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Schedule, null, Modifier.size(12.dp), tint = onSurfaceVariant)
+                        Icon(Icons.Filled.Schedule, null, Modifier.size(HUD_ICON), tint = onSurfaceVariant)
                         Spacer(Modifier.width(2.dp))
-                        Text("${state.connections.first { it.rtt > 0 }.rtt}ms", style = compact, color = onSurfaceVariant)
+                        Text("${state.connections.first { it.rtt > 0 }.rtt}ms", style = hudNumber, color = onSurfaceVariant)
                     }
                 }
                 if (hud.showThermal) {
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(HUD_GAP))
                     val tColor = if (thermalWarn) warn else tertiary
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Thermostat, null, Modifier.size(13.dp), tint = tColor)
+                        Icon(Icons.Filled.Thermostat, null, Modifier.size(HUD_ICON), tint = tColor)
                         Spacer(Modifier.width(2.dp))
-                        Text(thermalText(telemetry), style = compact, color = tColor, fontWeight = if (thermalWarn) FontWeight.Bold else FontWeight.Normal)
+                        Text(thermalText(telemetry), style = hudNumber, color = tColor, fontWeight = if (thermalWarn) FontWeight.Bold else FontWeight.Normal)
                     }
                 }
                 if (telemetry.batteryPct >= 0 && hud.showBattery) {
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(HUD_GAP))
                     val bColor = if (batteryWarn) warn else tertiary
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(batteryIcon(telemetry), null, Modifier.size(13.dp), tint = bColor)
+                        Icon(batteryIcon(telemetry), null, Modifier.size(HUD_ICON), tint = bColor)
                         Spacer(Modifier.width(2.dp))
-                        Text("${telemetry.batteryPct}%", style = compact, color = bColor, fontWeight = if (batteryWarn) FontWeight.Bold else FontWeight.Normal)
+                        Text("${telemetry.batteryPct}%", style = hudNumber, color = bColor, fontWeight = if (batteryWarn) FontWeight.Bold else FontWeight.Normal)
                     }
                 }
                 if (hud.showVersion) {
-                    Spacer(Modifier.width(8.dp))
-                    Text("v$versionName", style = compact, color = onSurfaceVariant)
+                    Spacer(Modifier.width(HUD_GAP))
+                    Text("v" + shortVersion(versionName), style = hudNumber, color = onSurfaceVariant)
                 }
                 Spacer(Modifier.width(4.dp))
-                Icon(if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, null, Modifier.size(14.dp), tint = onSurfaceVariant)
+                Icon(if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, null, Modifier.size(HUD_ICON), tint = onSurfaceVariant)
             }
         }
 
@@ -1700,7 +1910,7 @@ private fun HudCard(
                 Text(stringResource(R.string.stats_connections).uppercase(), style = compact, color = onSurfaceVariant)
                 Text(
                     stringResource(R.string.hud_total_mbps).format(java.util.Locale.US, bitrateMbps),
-                    style = compact,
+                    style = hudNumber,
                     color = tertiary,
                 )
             }
@@ -1712,11 +1922,11 @@ private fun HudCard(
                 Column(Modifier.padding(vertical = 3.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(channelIcon(conn.type), null, Modifier.size(13.dp), tint = color)
+                            Icon(channelIcon(conn.type), null, Modifier.size(HUD_ICON), tint = color)
                             Spacer(Modifier.width(5.dp))
-                            Text(conn.type.replaceFirstChar { it.uppercase() }, style = compact, color = onSurface)
+                            Text(channelName(conn), style = hudChannel, color = onSurface)
                         }
-                        Text("%.1f Mbps · %d%%".format(java.util.Locale.US, chanMbps, share), style = compact, color = onSurfaceVariant)
+                        Text("%.1f Mbps · %d%%".format(java.util.Locale.US, chanMbps, share), style = hudNumber, color = onSurfaceVariant)
                     }
                     Spacer(Modifier.height(3.dp))
                     LinearProgressIndicator(
@@ -1750,10 +1960,14 @@ private fun ChannelBars(
     totalBytes: Long,
     modifier: Modifier = Modifier,
 ) {
+    // Высота столбиков — по высоте строчной буквы, а не 14 dp: контейнер
+    // выравнивается по центру строки, столбики растут снизу, и при высоком
+    // контейнере короткий столбик оказывался заметно ниже текста рядом
+    // (владелец, 15.09: «индикация каналов опять ниже чем все»).
     Row(modifier = modifier, verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         state.connections.forEach { conn ->
             val share = if (totalBytes > 0) (conn.bytesSent * 100 / totalBytes).toInt() else 0
-            val h = (4 + (share.coerceIn(0, 100) * 10 / 100)).dp
+            val h = (3 + (share.coerceIn(0, 100) * 6 / 100)).dp
             Box(Modifier.width(3.dp).height(h).background(channelColor(conn.type), RoundedCornerShape(1.dp)))
         }
     }
@@ -1762,10 +1976,62 @@ private fun ChannelBars(
 @Composable
 private fun MetricCell(label: String, value: String, warn: Boolean) {
     Column {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = if (warn) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+        Text(label, style = HudLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            value,
+            style = HudNumber,
+            fontWeight = FontWeight.SemiBold,
+            color = if (warn) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
+
+/**
+ * Три роли текста в HUD — одна на всё.
+ *
+ * **Подпись** (`HudLabel`) — слова: LIVE, названия метрик, имя сцены.
+ * **Число** (`HudNumber`) — всё, что меняется на ходу. Моноширинный с
+ * табличными цифрами: пропорциональные цифры имеют разную ширину, и битрейт,
+ * прыгающий с 4.9 на 11.1, сдвигал соседние блоки строки на каждом обновлении.
+ * **Канал** (`HudChannel`) — имена линков, с разрядкой и заглавными: их читают
+ * боковым зрением, не вчитываясь, и разрядка помогает отличить их от чисел
+ * рядом.
+ *
+ * Размер значков тоже один. Было три (12, 13, 14 dp) — базовые линии не
+ * совпадали, и строка выглядела собранной из кусков.
+ */
+private val HUD_ICON = 13.dp
+
+/** Промежуток между смысловыми группами HUD. Один на всю строку: до 15.09 тут
+ *  жили вперемешку 4, 6 и 8 dp, и строка выглядела разреженной неровно. */
+private val HUD_GAP = 6.dp
+
+/** В HUD — только версия, без хэша сборки. Полная строка вида
+ *  «0.1.3-beta-d6ba8e4» съедала четверть места, а хэш нужен ровно в одном
+ *  случае — когда спрашивают, какая сборка стоит; он остался в «О приложении»
+ *  и в развёрнутой панели. */
+private fun shortVersion(versionName: String?): String =
+    versionName.orEmpty().substringBefore('-')
+
+private val HudLabel: TextStyle
+    @Composable get() = MaterialTheme.typography.labelSmall
+
+private val HudNumber: TextStyle
+    @Composable get() = MaterialTheme.typography.labelSmall.copy(
+        // Только табличные цифры, БЕЗ моноширинного шрифта. Моноширинный решал
+        // ту же задачу — одинаковая ширина цифр, — но заодно растягивал всю
+        // строку: буквы в нём шире и промежутки между знаками больше, и HUD
+        // раздулся так, что в него перестало помещаться (владелец, 15.09:
+        // «текст какой-то странно широкий между символами»). `tnum` даёт
+        // фиксированную ширину цифр в обычном шрифте.
+        fontFeatureSettings = "tnum",
+    )
+
+private val HudChannel: TextStyle
+    @Composable get() = MaterialTheme.typography.labelSmall.copy(
+        letterSpacing = 0.6.sp,
+        fontWeight = FontWeight.Medium,
+    )
 
 private fun batteryIcon(t: TelemetryView): ImageVector = when {
     t.batteryCharging -> Icons.Filled.Bolt
@@ -1778,6 +2044,34 @@ private fun channelColor(type: String): Color = when (type.lowercase()) {
     "wifi" -> MaterialTheme.colorScheme.primary
     "cellular" -> MaterialTheme.colorScheme.secondary
     else -> MaterialTheme.colorScheme.tertiary
+}
+
+/**
+ * Имя канала для HUD: у соты — имя оператора, а не слово CELLULAR.
+ *
+ * Владелец, пожелание 5: «хочу, чтобы в HUD отображалось не тупо WIFI CELLULAR,
+ * а имена сетей». У соты это бесплатно — `networkOperatorName` не требует
+ * никаких разрешений. **Имени Wi-Fi-сети здесь намеренно нет:** SSID на
+ * Android 10+ не отдаётся без `ACCESS_FINE_LOCATION` и включённых служб
+ * определения местоположения, поэтому он отложен к работе над геолокацией,
+ * а не выпрашивается ради одной строки в HUD.
+ *
+ * При двух SIM показывается оператор той, через которую идут данные: имя берётся
+ * у подписки по умолчанию, а бондинг всё равно использует её же.
+ */
+@Composable
+private fun channelName(conn: app.brix.core.ConnectionStat): String {
+    val context = LocalContext.current
+    return when (conn.type.lowercase()) {
+        "cellular" -> remember(context) {
+            (context.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager)
+                ?.networkOperatorName
+                ?.takeIf { it.isNotBlank() }
+        } ?: conn.type.replaceFirstChar { it.uppercase() }
+
+        "wifi" -> "Wi-Fi"
+        else -> conn.type.replaceFirstChar { it.uppercase() }
+    }
 }
 
 private fun channelIcon(type: String): ImageVector = when (type.lowercase()) {
@@ -2043,7 +2337,6 @@ private fun SettingsPanelContent(
     onRoute: (SettingsRoute) -> Unit,
     onCategoryChange: (SettingsCategory) -> Unit,
     onClose: () -> Unit,
-    onPlaceOverlay: (String) -> Unit,
     onPlaceWidget: (String) -> Unit,
 ) {
     Row(modifier = Modifier.fillMaxSize()) {
@@ -2136,32 +2429,19 @@ private fun SettingsPanelContent(
                 onBack = { onRoute(SettingsRoute.Menu) },
                 modifier = Modifier.weight(1f),
             )
-            SettingsRoute.Overlay -> OverlaySettingsScreen(
+            SettingsRoute.Widgets -> WidgetsSettingsScreen(
                 viewModel = viewModel,
-                onEdit = { id -> onRoute(SettingsRoute.OverlayEdit(id)) },
-                onPlaceOverlay = onPlaceOverlay,
-                onBack = { onRoute(SettingsRoute.Menu) },
-                modifier = Modifier.weight(1f),
-            )
-            is SettingsRoute.OverlayEdit -> OverlayEditScreen(
-                viewModel = viewModel,
-                overlayId = route.overlayId,
-                onNext = { id -> onPlaceOverlay(id) },
-                onBack = { onRoute(SettingsRoute.Overlay) },
-                modifier = Modifier.weight(1f),
-            )
-            SettingsRoute.BrowserWidgets -> BrowserWidgetSettingsScreen(
-                viewModel = viewModel,
-                onEdit = { id -> onRoute(SettingsRoute.BrowserWidgetEdit(id)) },
+                onEdit = { id, kind -> onRoute(SettingsRoute.WidgetEdit(id, kind)) },
                 onPlaceWidget = onPlaceWidget,
                 onBack = { onRoute(SettingsRoute.Menu) },
                 modifier = Modifier.weight(1f),
             )
-            is SettingsRoute.BrowserWidgetEdit -> BrowserWidgetEditScreen(
+            is SettingsRoute.WidgetEdit -> WidgetEditScreen(
                 viewModel = viewModel,
                 widgetId = route.widgetId,
+                newKind = route.newKind,
                 onNext = { id -> onPlaceWidget(id) },
-                onBack = { onRoute(SettingsRoute.BrowserWidgets) },
+                onBack = { onRoute(SettingsRoute.Widgets) },
                 modifier = Modifier.weight(1f),
             )
             is SettingsRoute.StreamProfileEdit -> StreamProfileEditScreen(
@@ -2201,6 +2481,7 @@ private fun FractionalBox(
             .fillMaxSize()
             .onSizeChanged { container = it },
     ) {
+        val density = LocalDensity.current
         val boxW = (container.width * widthFraction).toInt().coerceAtLeast(20)
         val boxH = (container.height * heightFraction).toInt().coerceAtLeast(20)
         val boxX = (container.width * posX - boxW / 2).toInt()
@@ -2212,8 +2493,13 @@ private fun FractionalBox(
                 // содержимое (ChatPanel, header-only) должно занимать только
                 // свою собственную высоту, а не всю отведённую область с
                 // пустотой под ней.
-                .width(boxW.dp)
-                .heightIn(max = boxH.dp),
+                // boxW/boxH — ПИКСЕЛИ (доля от container, который в пикселях),
+                // поэтому их нужно перевести в dp. Раньше здесь стояло
+                // `boxW.dp`, и на S21 (плотность 2.75) рамка была втрое больше
+                // своей доли кадра: человек выставлял окно «на пол-экрана», а
+                // сохранялось 0.157 ширины, и донат в эфире выходил крошечным.
+                .width(with(density) { boxW.toDp() })
+                .heightIn(max = with(density) { boxH.toDp() }),
         ) { content() }
     }
 }
@@ -2260,6 +2546,7 @@ private fun OverlayTuner(
     var localWidth by remember(widthFraction) { mutableStateOf(widthFraction) }
     var localHeight by remember(heightFraction) { mutableStateOf(heightFraction) }
 
+    val density = LocalDensity.current
     val boxW = (container.width * localWidth).toInt().coerceAtLeast(20)
     val boxH = (container.height * localHeight).toInt().coerceAtLeast(20)
     val boxX = (container.width * localPosX - boxW / 2).toInt()
@@ -2273,7 +2560,8 @@ private fun OverlayTuner(
         Box(
             modifier = Modifier
                 .offset { IntOffset(boxX, boxY) }
-                .size(boxW.dp, boxH.dp)
+                // Пиксели в dp — см. комментарий в FractionalBox.
+                .size(with(density) { boxW.toDp() }, with(density) { boxH.toDp() })
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                 .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
                 .pointerInput(Unit) {

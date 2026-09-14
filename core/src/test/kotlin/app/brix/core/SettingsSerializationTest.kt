@@ -231,11 +231,11 @@ class SettingsSerializationTest {
     // нет, для того ничего не должно измениться.
 
     private fun withLayers() = AppSettings(
-        overlays = listOf(
-            OverlayConfig(id = "o1", url = "https://a"),
-            OverlayConfig(id = "o2", url = "https://b"),
+        widgets = listOf(
+            SceneWidget(id = "o1", kind = WidgetKind.DONATION_ALERT, url = "https://a"),
+            SceneWidget(id = "o2", kind = WidgetKind.DONATION_ALERT, url = "https://b"),
+            SceneWidget(id = "w1", kind = WidgetKind.WEB, url = "https://c"),
         ),
-        browserWidgets = listOf(BrowserWidgetConfig(id = "w1", url = "https://c")),
     )
 
     @Test
@@ -249,7 +249,7 @@ class SettingsSerializationTest {
     fun `сцена оставляет в кадре только свои слои`() {
         val base = withLayers()
         val s = base.copy(
-            scenes = listOf(Scene(id = "s1", name = "камера", overlayIds = listOf("o2"))),
+            scenes = listOf(Scene(id = "s1", name = "камера", widgetIds = listOf("o2"))),
             selectedSceneId = "s1",
         )
 
@@ -267,6 +267,43 @@ class SettingsSerializationTest {
             selectedSceneId = "s1",
         )
         assertEquals(0, s.activeOverlays().size)
+    }
+
+    @Test
+    fun `два старых списка сливаются в один, а сцены — в widgetIds`() {
+        @Suppress("DEPRECATION")
+        val old = AppSettings(
+            overlays = listOf(OverlayConfig(id = "o1", url = "https://a", captionScale = 1.5f)),
+            browserWidgets = listOf(BrowserWidgetConfig(id = "w1", url = "https://c", refreshMs = 500L)),
+            scenes = listOf(Scene(id = "s1", name = "камера", overlayIds = listOf("o1"), browserWidgetIds = listOf("w1"))),
+        )
+
+        val migrated = old.migrate()
+
+        assertEquals(listOf("o1", "w1"), migrated.widgets.map { it.id })
+        assertEquals(WidgetKind.DONATION_ALERT, migrated.widgets[0].kind)
+        assertEquals("настройки донат-алерта не теряются", 1.5f, migrated.widgets[0].captionScale)
+        assertEquals(WidgetKind.WEB, migrated.widgets[1].kind)
+        assertEquals(500L, migrated.widgets[1].refreshMs)
+        assertEquals(listOf("o1", "w1"), migrated.scenes[0].widgetIds)
+        // Старые списки чистятся: иначе они лежат вечным дублем и удалённый
+        // виджет возвращается при следующем чтении файла.
+        @Suppress("DEPRECATION")
+        val leftovers = migrated.overlays.size + migrated.browserWidgets.size
+        assertEquals(0, leftovers)
+    }
+
+    @Test
+    fun `повторная миграция не воскрешает удалённый виджет`() {
+        @Suppress("DEPRECATION")
+        val once = AppSettings(
+            overlays = listOf(OverlayConfig(id = "o1", url = "https://a")),
+            browserWidgets = listOf(BrowserWidgetConfig(id = "w1", url = "https://c")),
+        ).migrate()
+
+        val afterDelete = once.copy(widgets = once.widgets.filterNot { it.id == "w1" })
+
+        assertEquals(listOf("o1"), afterDelete.migrate().widgets.map { it.id })
     }
 
     @Test

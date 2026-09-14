@@ -19,8 +19,8 @@ import app.brix.core.AdvancedSettings
 import app.brix.core.AudioSettings
 import app.brix.core.HudConfig
 import app.brix.core.CameraDefaults
-import app.brix.core.OverlayConfig
-import app.brix.core.BrowserWidgetConfig
+import app.brix.core.SceneWidget
+import app.brix.core.WidgetKind
 import app.brix.core.ChatSettings
 import app.brix.core.MoblinkSettings
 import app.brix.core.StreamPreset
@@ -234,16 +234,26 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         persist()
     }
 
-    fun saveOverlay(config: OverlayConfig) {
-        _settings.value = _settings.value.copy(
-            overlays = _settings.value.overlays.filterNot { it.id == config.id } + config,
-        )
+    fun saveWidget(config: SceneWidget) {
+        // Порядок в списке сохраняем: filterNot+plus переставлял бы правленый
+        // виджет в конец на каждом сохранении, и список тасовался бы сам собой.
+        val current = _settings.value.widgets
+        val updated = if (current.any { it.id == config.id }) {
+            current.map { if (it.id == config.id) config else it }
+        } else {
+            current + config
+        }
+        _settings.value = _settings.value.copy(widgets = updated)
         persist()
     }
 
-    fun deleteOverlay(id: String) {
+    fun deleteWidget(id: String) {
         _settings.value = _settings.value.copy(
-            overlays = _settings.value.overlays.filterNot { it.id == id },
+            widgets = _settings.value.widgets.filterNot { it.id == id },
+            // Ссылки в сценах чистим тем же движением: иначе сцена держит
+            // идентификатор удалённого виджета, и он всплывает при импорте
+            // настроек или при возврате виджета с тем же id.
+            scenes = _settings.value.scenes.map { it.copy(widgetIds = it.widgetIds.filterNot { w -> w == id }) },
         )
         persist()
     }
@@ -277,19 +287,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         persist()
     }
 
-    fun saveBrowserWidget(config: BrowserWidgetConfig) {
-        _settings.value = _settings.value.copy(
-            browserWidgets = _settings.value.browserWidgets.filterNot { it.id == config.id } + config,
-        )
-        persist()
-    }
-
-    fun deleteBrowserWidget(id: String) {
-        _settings.value = _settings.value.copy(
-            browserWidgets = _settings.value.browserWidgets.filterNot { it.id == id },
-        )
-        persist()
-    }
 
     /** [commit] = false while a Slider is being dragged: state updates so the
      *  UI (share %, switch) reflects the new weight instantly, but the
@@ -368,11 +365,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 fun newStreamProfile(name: String): StreamProfile =
     StreamProfile(id = Ids.newId(), name = name)
 
-fun newOverlay(url: String): OverlayConfig =
-    OverlayConfig(id = Ids.newId(), url = url)
-
-fun newBrowserWidget(url: String): BrowserWidgetConfig =
-    BrowserWidgetConfig(id = Ids.newId(), url = url)
+fun newWidget(kind: WidgetKind): SceneWidget =
+    SceneWidget(id = Ids.newId(), kind = kind)
 
 fun newServerProfile(name: String, url: String): ServerProfile =
     ServerProfile(

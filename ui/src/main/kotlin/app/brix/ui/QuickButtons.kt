@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.FlashlightOn
 import androidx.compose.material.icons.filled.FlashlightOff
@@ -166,6 +167,7 @@ fun ButtonAction.icon(active: Boolean = false): ImageVector = when (this) {
     // Активна, когда микрофон выбран вручную, а не отдан системе.
     ButtonAction.MIC -> if (active) Icons.Filled.SettingsVoice else Icons.Filled.KeyboardVoice
     ButtonAction.SCENE -> Icons.Filled.Layers
+    ButtonAction.SNAPSHOT -> Icons.Filled.PhotoCamera
 }
 
 @Composable
@@ -186,6 +188,7 @@ fun ButtonAction.label(): String = stringResource(
         ButtonAction.POWER_SAVE -> R.string.button_power_save
         ButtonAction.MIC -> R.string.button_mic
         ButtonAction.SCENE -> R.string.button_scene
+        ButtonAction.SNAPSHOT -> R.string.button_snapshot
     },
 )
 

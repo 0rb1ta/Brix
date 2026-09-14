@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ рисует заставку сам, до нашего кода, и берёт цвет отсюда.
+         Без этого он брал белый фон светлой темы — тот самый белый экран на
+         старте, который владелец видел и о котором писал (14.09 и 15.09). -->
+    <style name="Theme.Brix" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+    </style>
+</resources>

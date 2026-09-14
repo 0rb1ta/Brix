@@ -567,6 +567,15 @@ class Streamer(context: Context) : ConnectChecker, LiveStreamer {
 
     override fun videoFrameSize(): android.graphics.Point? = overlays.videoFrameSize()
 
+    override fun takeSnapshot(onResult: (android.graphics.Bitmap?) -> Unit) {
+        if (isReleased) {
+            onResult(null)
+            return
+        }
+        runCatching { stream.getGlInterface().takePhoto { bitmap -> onResult(bitmap) } }
+            .onFailure { onResult(null) }
+    }
+
     override fun setOverlayConnectionState(overlayId: String, connected: Boolean) =
         overlays.setConnectionState(overlayId, connected)
 

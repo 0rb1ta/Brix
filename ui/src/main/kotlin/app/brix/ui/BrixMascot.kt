@@ -48,11 +48,15 @@ private data class MascotLook(val face: String, val blinkFace: String, val color
 private fun lookFor(state: MascotState): MascotLook = when (state) {
     MascotState.OFFLINE -> MascotLook("?_?", "?-?", Color(0xFF8A857E))
     MascotState.IDLE -> MascotLook("•_•", "-_-", Color(0xFFFFC257))
-    MascotState.LIVE -> MascotLook("^_^", "^o^", Color(0xFFFFC257))
+    // Второе лицо — это МОРГАНИЕ, то есть закрытые глаза. Было «^o^»: круглый
+    // глаз посреди довольного лица читается совсем не как моргание (владелец,
+    // 14.09 — «во время стрима у него очко на лице появляется»).
+    MascotState.LIVE -> MascotLook("^_^", "-_-", Color(0xFFFFC257))
     MascotState.MUTED -> MascotLook("o_x", "-_x", Color(0xFFFFC257))
     MascotState.RECONNECTING -> MascotLook(">.<", "-.-", Color(0xFFFFC257))
     MascotState.OVERHEAT -> MascotLook("x_x", "x_x", Color(0xFFFF6B5B))
-    MascotState.DONATION -> MascotLook("\$_\$", "\$o\$", Color(0xFFFFC257))
+    // Тот же круглый глаз, что был у LIVE, и та же причина его убрать.
+    MascotState.DONATION -> MascotLook("\$_\$", "\$_\$", Color(0xFFFFC257))
 }
 
 private val CardBg = Color(0xFF140F06)
@@ -103,7 +107,9 @@ fun BrixMascot(state: MascotState, modifier: Modifier = Modifier) {
 
     // Blinks on its own random rhythm, independent of state changes, so it
     // never looks like it blinks "because" something happened — that's what
-    // actually reads as alive rather than reactive-only.
+    // actually reads as alive rather than reactive-only. В покое моргает тоже:
+    // 14.09 я убрал это по жалобе «в афк меняется выражение», но жалоба была
+    // про другое (см. blinkFace у LIVE), и моргание вернули.
     var blinking by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         while (true) {

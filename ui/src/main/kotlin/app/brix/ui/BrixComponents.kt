@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -70,7 +72,7 @@ fun BrixNavRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 11.dp),
+            .padding(vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -118,7 +120,7 @@ fun BrixToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 11.dp),
+            .padding(vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -232,4 +234,74 @@ fun <T> BrixSegmentRow(
         }
     }
     if (divider) RowDivider()
+}
+
+/**
+ * Компактный диалог вместо `AlertDialog`.
+ *
+ * У материального диалога поля 24 dp по кругу плюс свои промежутки между
+ * заголовком, текстом и кнопками. На телефоне, который в эфире держат
+ * горизонтально, это съедает почти всю доступную высоту: содержимого на две
+ * строки, а окно во весь экран (владелец, 15.09 — «гигантские поля, непонятно
+ * нахрена сделанные»). Здесь поля 16 dp, промежутки 8, ширина ограничена —
+ * рамка обнимает содержимое, а не наоборот.
+ */
+@Composable
+fun BrixDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    confirmLabel: String,
+    onConfirm: () -> Unit,
+    modifier: Modifier = Modifier,
+    dismissLabel: String? = null,
+    /** Опасное действие — красная кнопка подтверждения. */
+    destructive: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit = {},
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = BrixShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = modifier.widthIn(max = 360.dp),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                Text(text = title, style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(6.dp))
+                content()
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    // У TextButton своя минимальная высота 40 dp и поля 24 dp
+                    // по бокам — на два слова это половина диалога. Ужимаем до
+                    // размера, который всё ещё уверенно попадается пальцем.
+                    val tight = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    if (dismissLabel != null) {
+                        androidx.compose.material3.TextButton(
+                            onClick = onDismiss,
+                            contentPadding = tight,
+                            modifier = Modifier.heightIn(min = 34.dp),
+                        ) { Text(dismissLabel) }
+                        Spacer(Modifier.width(2.dp))
+                    }
+                    androidx.compose.material3.TextButton(
+                        onClick = onConfirm,
+                        contentPadding = tight,
+                        modifier = Modifier.heightIn(min = 34.dp),
+                    ) {
+                        Text(
+                            text = confirmLabel,
+                            color = if (destructive) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
 }

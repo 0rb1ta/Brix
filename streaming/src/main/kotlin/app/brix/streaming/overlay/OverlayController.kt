@@ -79,6 +79,10 @@ class OverlayController(
         val posY: Float,
         val width: Float,
         val height: Float,
+        /** Множитель размера подписи, задаётся человеком. 1.0 — исходный. */
+        val captionScale: Float = 1f,
+        /** Показывать ли подпись. */
+        val captionVisible: Boolean = true,
     )
 
     /**
@@ -94,7 +98,6 @@ class OverlayController(
         streamer.setOverlayAudioInStream(lateAudioOverlayId, enabled, if (enabled) lateAudioPlayer else null)
     }
 
-    private val captionOverlayId get() = "$overlayId#text"
 
     /** Shows an alert from media already resolved (e.g. from the JS bridge). */
     fun show(media: AlertMedia, audio: AudioOptions) {
@@ -126,76 +129,82 @@ class OverlayController(
             }
             val totalDurationMs = maxOf(media.durationMs, audioMs)
 
-            // Ties caption text size to how big the donor configured the
-            // donation overlay itself (media.width, set via the placement
-            // wizard) — 0.18 is the app-wide default overlay size, so a
-            // caption at that size renders at the original fixed textSize;
-            // resizing the overlay box scales the caption proportionally.
-            val sizeScale = (media.width / 0.18f).coerceIn(0.6f, 3f)
-            val captionBitmap = if (media.username != null || media.amount != null || media.text != null) {
-                renderCaption(media.username, media.amount, media.text, sizeScale)
+            // Размер подписи задаётся ОТДЕЛЬНОЙ настройкой, а не выводится из
+            // ширины картинки. Раньше было `media.width / 0.18f`, и чтобы изменить
+            // текст, приходилось менять размер окна оверлея — единственную ручку,
+            // которая на него влияла (владелец, 14.09).
+            val sizeScale = media.captionScale.coerceIn(0.5f, 3f)
+
+            // Подпись рисуется СРАЗУ В ТОМ разрешении, в каком уйдёт в кадр.
+            // Раньше она всегда была шириной 640 пикселей, а блок потом
+            // растягивался GL-фильтром до размера окна — на большом окне буквы
+            // размывались и «ломались» (владелец, 14.09). Считаем целевую
+            // ширину блока в пикселях кадра и рисуем текст под неё; масштаб
+            // всех размеров — тот же множитель, поэтому вид не меняется,
+            // меняется только чёткость.
+            val frameSize = streamer.videoFrameSize()
+            val targetPx = ((frameSize?.x ?: 1920) * size.widthFraction)
+                .toInt().coerceIn(320, 3840)
+            val renderScale = targetPx / CAPTION_BASE_WIDTH
+
+            val captionBitmap = if (media.captionVisible &&
+                (media.username != null || media.amount != null || media.text != null)
+            ) {
+                renderCaption(media.username, media.amount, media.text, sizeScale, targetPx, renderScale)
             } else {
                 null
             }
 
-            streamer.showOverlay(overlayId, frames, media.posX, media.posY, size, totalDurationMs)
-            if (captionBitmap != null) {
-                val captionWidth = (0.5f * sizeScale).coerceIn(0.2f, 0.95f)
-                // captionBitmap.height/width is a PIXEL aspect ratio; posX/posY/
-                // width/height everywhere else in this file are fractions of the
-                // video frame's own width and height *separately* (OverlaySize),
-                // which only equal the same physical scale when the frame is
-                // square. A 16:9 frame isn't, so the pixel ratio needs correcting
-                // by the frame's own aspect ratio before it's usable as a height
-                // fraction — skipping that (as this used to) renders the caption
-                // squashed by exactly that factor (~1.78x on a 16:9 frame).
-                val frameSize = streamer.videoFrameSize()
-                val frameAspect = if (frameSize != null && frameSize.y > 0) {
-                    frameSize.x.toFloat() / frameSize.y.toFloat()
-                } else {
-                    16f / 9f
-                }
-                val captionHeight = (captionWidth * captionBitmap.height / captionBitmap.width * frameAspect)
-                    .coerceIn(0.02f, 0.9f)
-                val captionPosY = (media.posY + size.heightFraction / 2f + captionHeight / 2f + 0.02f).coerceIn(0.05f, 0.95f)
-                android.util.Log.d(
-                    "Overlay",
-                    "caption geometry: width=$captionWidth height=$captionHeight posX=${media.posX} posY=$captionPosY " +
-                        "bitmap=${captionBitmap.width}x${captionBitmap.height} frameAspect=$frameAspect " +
-                        // frameSize is the raw GlInterface.encoderSize. Logged
-                        // explicitly because frameAspect alone cannot tell the
-                        // two cases apart: a real 1280x720 encoder and the
-                        // "no encoder size, fall back to 16/9" branch both
-                        // print 1.7777778. Only setEncoderSize() gives the GL
-                        // chain a target size and it is called solely from
-                        // prepareVideo(), i.e. on Start — so a null here on a
-                        // never-started session says the overlay filters had
-                        // nothing valid to render into.
-                        "frameSize=$frameSize",
-                )
-                // SrtlaStreamer.showOverlay()'s animation loop re-evaluates
-                // alpha (for the fade in/out) once per frame, then delay()s
-                // that frame's own durationMs before the next iteration —
-                // it's how the GIF path's fade works, since a real GIF has
-                // many short frames so the loop runs often. A single frame
-                // whose own durationMs equals the *whole* alert duration
-                // makes the loop set alpha once (still ~0, at the very start
-                // of the 250ms fade-in) and then sleep for the entire
-                // duration without ever running again — the caption was
-                // provably never becoming visible, staying at that initial
-                // near-zero alpha for its whole lifetime. Use a short
-                // per-frame duration instead so the loop actually keeps
-                // re-evaluating alpha; totalDurationMs (passed separately,
-                // below) still controls how long the caption is shown for.
-                streamer.showOverlay(
-                    captionOverlayId,
-                    listOf(OverlayFrame(captionBitmap, 100L)),
-                    media.posX,
-                    captionPosY,
-                    OverlaySize(captionWidth, captionHeight),
-                    totalDurationMs,
-                )
+            // КАРТИНКА И ПОДПИСЬ — ОДИН БЛОК, склеенный в одно изображение.
+            //
+            // Раньше это были два независимых оверлея со своей геометрией, и они
+            // расходились: подпись считала ширину от своего масштаба, положение —
+            // от картинки, у края кадра её приходилось сужать или сдвигать, и
+            // центр переставал совпадать. Каждая правка чинила очередной симптом.
+            //
+            // Владелец 14.09 сформулировал модель: «картинка, ник, сумма и текст
+            // должны быть одним блоком, от изменения размера окна они все вместе
+            // увеличиваются или уменьшаются». Склеенный блок это и даёт даром:
+            // центр совпадает по построению, у краёв ничего не разъезжается,
+            // размер окна масштабирует всё разом.
+            val blockFrames = if (captionBitmap != null) {
+                frames.map { OverlayFrame(compose(it.bitmap, captionBitmap, renderScale), it.durationMs) }
+            } else {
+                frames
             }
+
+            // Высота выводится из пропорций склеенного блока, а не берётся из
+            // настройки: иначе перетаскивание угла растянуло бы текст.
+            val blockBitmap = blockFrames.first().bitmap
+            val frameAspect = if (frameSize != null && frameSize.y > 0) {
+                frameSize.x.toFloat() / frameSize.y.toFloat()
+            } else {
+                16f / 9f
+            }
+            // Блок ВПИСЫВАЕТСЯ в окно, заданное человеком, а не просто берёт его
+            // ширину. Раньше высота выводилась из ширины, и если окно было
+            // вытянутым по вертикали, блок занимал четверть от него — человек
+            // тянет рамку, а картинка не растёт (владелец, 14.09). Теперь
+            // масштаб — наибольший, при котором блок целиком влезает в рамку:
+            // одна из сторон совпадает с окном, вторая меньше.
+            val blockAspect = blockBitmap.height.toFloat() / blockBitmap.width * frameAspect
+            val fitWidth = minOf(size.widthFraction, size.heightFraction / blockAspect)
+            val blockWidth = fitWidth.coerceIn(0.02f, 1f)
+            val blockHeight = (blockWidth * blockAspect).coerceIn(0.02f, 0.95f)
+            android.util.Log.d(
+                "Overlay",
+                "блок: ${blockBitmap.width}x${blockBitmap.height} width=${size.widthFraction} " +
+                    "-> $blockWidth x $blockHeight (окно ${size.widthFraction}x${size.heightFraction}) " +
+                    "frameAspect=$frameAspect frameSize=$frameSize",
+            )
+            streamer.showOverlay(
+                overlayId,
+                blockFrames,
+                media.posX,
+                media.posY,
+                OverlaySize(blockWidth, blockHeight),
+                totalDurationMs,
+            )
 
             // Audio runs ALONGSIDE the display, not instead of it. Awaiting
             // playAudioSequence() made the visible lifetime equal the clip
@@ -213,7 +222,6 @@ class OverlayController(
             }
 
             streamer.hideOverlay(overlayId)
-            if (captionBitmap != null) streamer.hideOverlay(captionOverlayId)
         }
     }
 
@@ -244,7 +252,52 @@ class OverlayController(
      *  with a black outline for legibility directly over the camera feed
      *  (matches the look of typical donation-alert widgets) — so it can be
      *  shown through the same native overlay pipeline as the alert image. */
-    private fun renderCaption(username: String?, amount: String?, text: String?, sizeScale: Float): Bitmap? {
+    /**
+     * Склеивает кадр картинки и подпись в одно изображение: картинка сверху,
+     * подпись под ней, обе по центру общей ширины.
+     *
+     * Так блок масштабируется целиком и не может разъехаться — это и есть
+     * решение, которое искали правками геометрии двух отдельных оверлеев.
+     */
+    private fun compose(image: Bitmap, caption: Bitmap, renderScale: Float): Bitmap {
+        // Картинка на 20% мельче собственного размера: в склеенном блоке она
+        // забивала подпись, потому что типовой донат-гиф шире 640 пикселей, в
+        // которые рисуется текст (владелец, 14.09 — «картинка очень крупная по
+        // отношению к тексту»). Пропорция картинки к тексту задаётся здесь, а
+        // ручка captionScale по-прежнему двигает текст в другую сторону.
+        val imageWidth = (image.width * IMAGE_TO_CAPTION * renderScale).toInt().coerceAtLeast(1)
+        val imageHeight = (image.height.toFloat() * imageWidth / image.width).toInt().coerceAtLeast(1)
+        val imageScaled = Bitmap.createScaledBitmap(image, imageWidth, imageHeight, true)
+
+        val gap = (imageHeight * 0.04f).toInt().coerceAtLeast(4)
+        // Подпись рисуется в фиксированные 640 пикселей ширины; вписываем её в
+        // ширину блока, сохраняя пропорции.
+        val width = maxOf(imageWidth, caption.width)
+        val captionScaled = if (caption.width == width) {
+            caption
+        } else {
+            Bitmap.createScaledBitmap(
+                caption,
+                width,
+                (caption.height.toFloat() * width / caption.width).toInt().coerceAtLeast(1),
+                true,
+            )
+        }
+        val out = Bitmap.createBitmap(width, imageHeight + gap + captionScaled.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        canvas.drawBitmap(imageScaled, ((width - imageWidth) / 2f), 0f, null)
+        canvas.drawBitmap(captionScaled, ((width - captionScaled.width) / 2f), (imageHeight + gap).toFloat(), null)
+        return out
+    }
+
+    private fun renderCaption(
+        username: String?,
+        amount: String?,
+        text: String?,
+        sizeScale: Float,
+        width: Int,
+        renderScale: Float,
+    ): Bitmap? {
         if (username.isNullOrBlank() && amount.isNullOrBlank() && text.isNullOrBlank()) return null
         val header = listOfNotNull(username?.takeIf { it.isNotBlank() }, amount?.takeIf { it.isNotBlank() })
             .joinToString(" — ")
@@ -268,16 +321,15 @@ class OverlayController(
             return builder
         }
 
-        val width = 640
         val strokePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = 40f * sizeScale
+            textSize = 40f * sizeScale * renderScale
             style = Paint.Style.STROKE
-            strokeWidth = 7f * sizeScale
+            strokeWidth = 7f * sizeScale * renderScale
             strokeJoin = Paint.Join.ROUND
             color = Color.BLACK
         }
         val fillPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = 40f * sizeScale
+            textSize = 40f * sizeScale * renderScale
             color = Color.WHITE
         }
         val strokeContent = buildContent(withColor = false)
@@ -292,7 +344,7 @@ class OverlayController(
         // A little vertical breathing room so the stroke isn't clipped at
         // the very top/bottom of the bitmap — not a visible box, since
         // there's no background fill anymore.
-        val padding = 8
+        val padding = (8 * renderScale).toInt().coerceAtLeast(2)
         val bitmap = Bitmap.createBitmap(width, strokeLayout.height + padding * 2, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.translate(0f, padding.toFloat())
@@ -313,5 +365,12 @@ class OverlayController(
         // since the caption is drawn by us, not scraped as a styled image,
         // and the goal is to be indistinguishable from their own widget.
         const val HEADER_COLOR = 0xFFF57D07.toInt()
+
+        // Во сколько раз картинка мельче своего исходного размера внутри блока.
+        const val IMAGE_TO_CAPTION = 0.8f
+
+        // Разрешение, в котором подпись рисовалась раньше всегда; теперь это
+        // опорная точка, от которой считается множитель чёткости.
+        const val CAPTION_BASE_WIDTH = 640f
     }
 }

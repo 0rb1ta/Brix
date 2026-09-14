@@ -57,6 +57,7 @@ enum class ButtonAction {
     POWER_SAVE,
     MIC,
     SCENE,
+    SNAPSHOT,
 }
 
 /**
@@ -342,7 +343,11 @@ data class Scene(
     /** Картинка заставки: content-URI из системного выбора файлов. */
     val imageUri: String = "",
     val camera: CameraSide = CameraSide.BACK,
+    /** Виджеты сцены — единый список, см. [SceneWidget]. */
+    val widgetIds: List<String> = emptyList(),
+    @Deprecated("Слито в widgetIds, читается только миграцией.")
     val overlayIds: List<String> = emptyList(),
+    @Deprecated("Слито в widgetIds, читается только миграцией.")
     val browserWidgetIds: List<String> = emptyList(),
 )
 
@@ -479,6 +484,24 @@ data class OverlayConfig(
     val audioOnDevice: Boolean = false,
     /** Mix alert audio into the stream (viewers hear it). */
     val audioInStream: Boolean = false,
+    /**
+     * Размер подписи (имя, сумма, сообщение) — множитель, 1.0 это исходный.
+     *
+     * **Зачем своя настройка.** Раньше размер текста считался от ШИРИНЫ КАРТИНКИ
+     * через константу 0.18, и единственным способом повлиять на текст было менять
+     * размер окна оверлея наугад. Владелец 14.09: «фиксится только если поменять
+     * размер окна донатного виджета на угад».
+     */
+    val captionScale: Float = 1f,
+    /**
+     * Показывать ли подпись. Выключается, когда виджет площадки рисует текст сам.
+     *
+     * **Выбора «сверху или снизу» здесь намеренно нет.** Порядок в донат-алерте
+     * устоявшийся: картинка, под ней ник и сумма, под ними текст сообщения. Люди
+     * к нему привыкли, и давать ручку, которая его ломает, — не гибкость, а
+     * способ сделать непривычно (владелец, 14.09).
+     */
+    val captionVisible: Boolean = true,
 )
 
 /** A generic "browser source" overlay — any URL, rendered live via periodic
@@ -500,6 +523,108 @@ data class BrowserWidgetConfig(
     val refreshMs: Long = 200L,
 )
 
+/**
+ * Тип виджета сцены.
+ *
+ * Раньше списков было два — «Оверлеи» (донат-алерты) и «Браузерные виджеты», и
+ * человеку приходилось угадывать, куда класть очередную вещь: один браузерный
+ * виджет доната шёл в первый список, другой во второй (владелец, 14.09).
+ * Разделение при этом было не по смыслу для человека, а по нашей реализации.
+ *
+ * Второе, что оно ломало, — расход. Всё, кроме донат-алерта, ехало через
+ * WebView, то есть «повесить картинку» стоило целого браузера: замерено 9–10%
+ * ядра на виджет, и два виджета легко превращались в четыре. Типы
+ * [WidgetKind.IMAGE] и [WidgetKind.TEXT] рисуются нативно и WebView не заводят
+ * вовсе.
+ */
+@Serializable
+enum class WidgetKind {
+    /** Донат-алерт: страница площадки, из которой мы вылавливаем алерты. */
+    DONATION_ALERT,
+
+    /** Произвольная веб-страница, снимок раз в [SceneWidget.refreshMs]. */
+    WEB,
+
+    /** Локальная картинка (PNG/GIF), без браузера. */
+    IMAGE,
+
+    /** Строка текста с подстановками, без браузера. */
+    TEXT,
+}
+
+/**
+ * Виджет сцены — единая замена [OverlayConfig] и [BrowserWidgetConfig].
+ *
+ * Поля, осмысленные не для всех типов, лежат здесь же, а не в наследниках:
+ * запись на диск идёт через kotlinx, а полиморфная сериализация ради четырёх
+ * типов усложнила бы и файл, и миграцию. Незначащие поля просто не читаются.
+ */
+@Serializable
+data class SceneWidget(
+    val id: String,
+    val kind: WidgetKind = WidgetKind.DONATION_ALERT,
+    /** Имя в списке. Пустое — показываем адрес или тип. */
+    val name: String = "",
+    val enabled: Boolean = true,
+    /** Якорь на кадре, доли 0..1 (0.5,0.5 — центр). */
+    val posX: Float = 0.5f,
+    val posY: Float = 0.5f,
+    /** Размер как доли ширины и высоты кадра. */
+    val width: Float = 0.18f,
+    val height: Float = 0.18f,
+    /** [WidgetKind.DONATION_ALERT] и [WidgetKind.WEB]. */
+    val url: String = "",
+    /** [WidgetKind.DONATION_ALERT]: звук алерта в динамик телефона. */
+    val audioOnDevice: Boolean = false,
+    /** [WidgetKind.DONATION_ALERT]: звук алерта в эфир. */
+    val audioInStream: Boolean = false,
+    /** [WidgetKind.DONATION_ALERT]: множитель размера подписи. */
+    val captionScale: Float = 1f,
+    /** [WidgetKind.DONATION_ALERT]: рисовать ли подпись самим. */
+    val captionVisible: Boolean = true,
+    /** [WidgetKind.WEB]: период пересъёмки WebView, мс. Съёмка дорогая. */
+    val refreshMs: Long = 200L,
+    /** [WidgetKind.IMAGE]: content-URI из системного выбора файлов. */
+    val imageUri: String = "",
+    /** [WidgetKind.TEXT]: строка с подстановками вида {time}. */
+    val template: String = "",
+    /** [WidgetKind.TEXT]: множитель размера шрифта. */
+    val textScale: Float = 1f,
+) {
+    /** Что показать в списке, когда имя не задано. */
+    fun displayTitle(): String = when {
+        name.isNotBlank() -> name
+        kind == WidgetKind.TEXT -> template
+        kind == WidgetKind.IMAGE -> imageUri.substringAfterLast('/')
+        else -> url
+    }
+
+    fun toOverlayConfig(): OverlayConfig = OverlayConfig(
+        id = id,
+        url = url,
+        enabled = enabled,
+        posX = posX,
+        posY = posY,
+        width = width,
+        height = height,
+        audioOnDevice = audioOnDevice,
+        audioInStream = audioInStream,
+        captionScale = captionScale,
+        captionVisible = captionVisible,
+    )
+
+    fun toBrowserWidgetConfig(): BrowserWidgetConfig = BrowserWidgetConfig(
+        id = id,
+        url = url,
+        enabled = enabled,
+        posX = posX,
+        posY = posY,
+        width = width,
+        height = height,
+        refreshMs = refreshMs,
+    )
+}
+
 @Serializable
 data class AppSettings(
     /** Настройки звука общие для всех профилей. Раньше лежали в каждом
@@ -514,7 +639,10 @@ data class AppSettings(
     val advanced: AdvancedSettings = AdvancedSettings(),
     val quickButtons: QuickButtonConfig = QuickButtonConfig(),
     val hud: HudConfig = HudConfig(),
+    val widgets: List<SceneWidget> = emptyList(),
+    @Deprecated("Слито в widgets, читается только миграцией.")
     val overlays: List<OverlayConfig> = emptyList(),
+    @Deprecated("Слито в widgets, читается только миграцией.")
     val browserWidgets: List<BrowserWidgetConfig> = emptyList(),
     val customPresets: List<StreamPreset> = emptyList(),
     val moblink: MoblinkSettings = MoblinkSettings(),
@@ -550,15 +678,16 @@ data class AppSettings(
      * не должно означать «теперь настраивай заново»: у кого сцен нет, для того
      * ничего не меняется.
      */
-    fun activeOverlays(): List<OverlayConfig> {
-        val scene = selectedScene() ?: return overlays
-        return overlays.filter { it.id in scene.overlayIds }
+    fun activeWidgets(): List<SceneWidget> {
+        val scene = selectedScene() ?: return widgets
+        return widgets.filter { it.id in scene.widgetIds }
     }
 
-    fun activeBrowserWidgets(): List<BrowserWidgetConfig> {
-        val scene = selectedScene() ?: return browserWidgets
-        return browserWidgets.filter { it.id in scene.browserWidgetIds }
-    }
+    fun activeOverlays(): List<OverlayConfig> =
+        activeWidgets().filter { it.kind == WidgetKind.DONATION_ALERT }.map { it.toOverlayConfig() }
+
+    fun activeBrowserWidgets(): List<BrowserWidgetConfig> =
+        activeWidgets().filter { it.kind == WidgetKind.WEB }.map { it.toBrowserWidgetConfig() }
 
     fun enabledServers(): List<ServerProfile> =
         serverProfiles.filter { it.enabled }
@@ -627,10 +756,64 @@ data class AppSettings(
         } else {
             moblink
         }
+        // Два списка сливаются в один (14.09). Порядок — сначала донат-алерты,
+        // потом браузерные: так он выглядел на экранах, и человек находит свои
+        // виджеты там же, где привык. Старые списки после переноса чистим,
+        // иначе они лежат на диске вечным дублем и миграция не идемпотентна:
+        // достаточно один раз удалить виджет, и он вернётся при следующем чтении.
+        val migratedWidgets = if (widgets.isEmpty() && (migratedOverlays.isNotEmpty() || browserWidgets.isNotEmpty())) {
+            migratedOverlays.map { o ->
+                SceneWidget(
+                    id = o.id,
+                    kind = WidgetKind.DONATION_ALERT,
+                    enabled = o.enabled,
+                    posX = o.posX,
+                    posY = o.posY,
+                    width = o.width,
+                    height = o.height,
+                    url = o.url,
+                    audioOnDevice = o.audioOnDevice,
+                    audioInStream = o.audioInStream,
+                    captionScale = o.captionScale,
+                    captionVisible = o.captionVisible,
+                )
+            } + browserWidgets.map { w ->
+                SceneWidget(
+                    id = w.id,
+                    kind = WidgetKind.WEB,
+                    enabled = w.enabled,
+                    posX = w.posX,
+                    posY = w.posY,
+                    width = w.width,
+                    height = w.height,
+                    url = w.url,
+                    refreshMs = w.refreshMs,
+                )
+            }
+        } else {
+            widgets
+        }
+        // Сцены ссылались на два списка идентификаторов; сводим в один. Условие
+        // «widgetIds пуст» делает перенос однократным — иначе сцена, из которой
+        // виджет намеренно убрали, получала бы его обратно.
+        val migratedScenes = scenes.map { scene ->
+            if (scene.widgetIds.isEmpty() && (scene.overlayIds.isNotEmpty() || scene.browserWidgetIds.isNotEmpty())) {
+                scene.copy(
+                    widgetIds = scene.overlayIds + scene.browserWidgetIds,
+                    overlayIds = emptyList(),
+                    browserWidgetIds = emptyList(),
+                )
+            } else {
+                scene
+            }
+        }
         return copy(
             moblink = migratedMoblink,
             serverProfiles = migratedServers,
-            overlays = migratedOverlays,
+            widgets = migratedWidgets,
+            overlays = emptyList(),
+            browserWidgets = emptyList(),
+            scenes = migratedScenes,
             audio = migratedAudio,
             streamProfiles = migratedProfiles,
         )
