@@ -155,6 +155,11 @@ internal class CameraController(
         }
     }
 
+    /** Размеры, с которыми превью реально стартовало: по ним видно, что окно
+     *  с тех пор повернулось и viewport больше не соответствует поверхности. */
+    private var lastStartedWidth = 0
+    private var lastStartedHeight = 0
+
     fun startPreview(surfaceView: SurfaceView) {
         try {
             // Размер буфера, а не вьюхи. UI зовёт holder.setFixedSize(), то есть
@@ -170,9 +175,23 @@ internal class CameraController(
                 lastPreviewWidth = pw
                 lastPreviewHeight = ph
             }
+            // Превью, запущенное с ДРУГИМ размером поверхности, надо
+            // перезапустить. Размер уходит в glViewport один раз, при старте:
+            // если окно с тех пор повернулось (портретная заставка на запуске —
+            // 15.09), картинка остаётся узкой вертикальной полосой посреди
+            // альбомного экрана. Стримить в этот момент нельзя — на живом эфире
+            // не трогаем ничего.
+            val sizeChanged = pw != lastStartedWidth || ph != lastStartedHeight
+            if (stream.isOnPreview && sizeChanged && !stream.isStreaming &&
+                surfaceView.holder.surface.isValid
+            ) {
+                runCatching { stream.stopPreview() }
+            }
             if (!stream.isOnPreview && surfaceView.holder.surface.isValid) {
                 dropDeadScreenSource()
                 stream.startPreview(surfaceView.holder.surface, pw, ph)
+                lastStartedWidth = pw
+                lastStartedHeight = ph
                 applyPostPreviewCameraSetup()
             }
         } catch (e: Exception) {

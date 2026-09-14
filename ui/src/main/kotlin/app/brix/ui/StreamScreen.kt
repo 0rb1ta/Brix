@@ -86,6 +86,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInput
@@ -197,10 +198,6 @@ private fun routeSaver(): androidx.compose.runtime.saveable.Saver<SettingsRoute,
 fun StreamScreen(
     settings: AppSettings,
     settingsViewModel: SettingsViewModel,
-    /** Доиграла ли заставка. Пока нет — камеру не трогаем вовсе: заставка
-     *  портретная, а эфирный экран альбомный, и камера, поднятая в портрете,
-     *  после разворота отдавала вертикальную картинку (владелец, 15.09). */
-    introDone: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val enabledServers = settings.enabledServers()
@@ -297,7 +294,6 @@ fun StreamScreen(
                     // Сцена решает, что показывать. Пока сцен нет — прежнее
                     // поведение: показываем всё включённое. Так включение сцен
                     // не ломает настройку тем, кто ими не пользуется.
-                    introDone = introDone,
                     overlays = settings.activeOverlays(),
                     // Размещаемый ищется по ПОЛНОМУ списку, а не по активным:
                     // activeOverlays() отдаёт только оверлеи выбранной сцены, и
@@ -393,8 +389,6 @@ private fun ImmersiveStream(
     autoHideHud: Boolean,
     hud: app.brix.core.HudConfig,
     chat: app.brix.core.ChatSettings,
-    /** См. одноимённый параметр [StreamScreen]. */
-    introDone: Boolean,
     overlays: List<app.brix.core.OverlayConfig>,
     browserWidgets: List<app.brix.core.BrowserWidgetConfig>,
     /** Картинки — рисуются нативно, без WebView. */
@@ -795,13 +789,7 @@ private fun ImmersiveStream(
         requestNotifications()
     }
 
-    LaunchedEffect(introDone) {
-        // Ждём конца заставки. prepare() поднимает камеру, GL-цепочку и
-        // энкодер, а ориентацию они берут в момент запуска: сделанное в
-        // портрете остаётся портретным и после разворота в альбом — та самая
-        // «горизонтальная страница с вертикальной камерой». Заставка всё равно
-        // закрывает экран целиком, так что ничего не теряется.
-        if (!introDone) return@LaunchedEffect
+    LaunchedEffect(Unit) {
         if (profile != null) streamer.configure(profile, server.latencyMs)
         streamer.configureMoblink(moblink)
         (streamer as? app.brix.streaming.SrtlaStreamer)?.setPreferIpv4(server.preferIpv4)
@@ -1061,6 +1049,18 @@ private fun ImmersiveStream(
                                     height: Int,
                                 ) {
                                     android.util.Log.w("BrixPreview", "surfaceChanged width=$width height=$height format=$format")
+                                    // Поверхность сменила размер — значит окно
+                                    // повернулось. startPreview сам решит, надо
+                                    // ли перезапускаться: он сравнивает размер с
+                                    // тем, с которым стартовал (см.
+                                    // CameraController). Без этого после
+                                    // портретной заставки превью оставалось
+                                    // вертикальной полосой.
+                                    try {
+                                        if (ready) streamer.startPreview(sv)
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("BrixPreview", "startPreview on resize failed", e)
+                                    }
                                 }
 
                                 override fun surfaceDestroyed(holder: SurfaceHolder) {

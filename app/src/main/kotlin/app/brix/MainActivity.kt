@@ -3,7 +3,6 @@ package app.brix
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.os.Bundle
 import android.util.Log
@@ -93,27 +92,12 @@ class MainActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         pendingDeepLink.value = intent?.dataString
-        // Окно ОТКРЫВАЕТСЯ портретным — так объявлено в манифесте. Иначе
-        // система создавала его альбомным по прежнему `sensorLandscape`, и
-        // человек видел лишний переворот: альбом, потом портрет заставки, потом
-        // снова альбом (владелец, 15.09). Альбомную ориентацию возвращаем сами,
-        // когда заставка доиграла.
-        //
-        // savedInstanceState != null — возврат в уже живущую Activity (смена
-        // языка пересоздаёт её), заставки там нет, и ждать нечего.
-        if (savedInstanceState != null) {
-            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        }
         setContent {
             val settingsViewModel: SettingsViewModel = viewModel()
             val settings by settingsViewModel.settings.collectAsState()
             BrixTheme(appearance = settings.appearance) {
                 var introDone by rememberSaveable { mutableStateOf(false) }
-                AppRoot(
-                    settings = settings,
-                    settingsViewModel = settingsViewModel,
-                    introDone = introDone,
-                )
+                AppRoot(settings = settings, settingsViewModel = settingsViewModel)
                 DeepLinkImportDialog(pendingDeepLink, settingsViewModel)
                 // Заставка ПОВЕРХ уже собранного экрана, а не вместо него:
                 // пока она играет, камера и настройки успевают подняться, и к
@@ -121,18 +105,7 @@ class MainActivity : ComponentActivity() {
                 // rememberSaveable — чтобы смена языка или поворот, которые
                 // пересоздают Activity, не проигрывали её заново.
                 if (!introDone) {
-                    BrixIntro(
-                        onFinished = {
-                            introDone = true
-                            // Ориентацию возвращаем ТОЛЬКО когда заставка
-                            // доиграла: пока она на экране, приложение стоит
-                            // портретом (см. onCreate), а эфирный экран
-                            // альбомный. В манифесте объявлен configChanges с
-                            // orientation и screenSize, поэтому поворот не
-                            // пересоздаёт Activity и не роняет камеру с превью.
-                            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                        },
-                    )
+                    BrixIntro(onFinished = { introDone = true })
                 }
             }
         }
@@ -171,7 +144,6 @@ class MainActivity : ComponentActivity() {
 private fun AppRoot(
     settings: app.brix.core.AppSettings,
     settingsViewModel: SettingsViewModel,
-    introDone: Boolean,
 ) {
     // attachBaseContext() only runs on (re)creation — picking a new language
     // in Settings needs an explicit recreate() to actually re-read it.
@@ -209,7 +181,7 @@ private fun AppRoot(
             (context as? Activity)?.recreate()
         }
     }
-    StreamScreen(settings = settings, settingsViewModel = settingsViewModel, introDone = introDone)
+    StreamScreen(settings = settings, settingsViewModel = settingsViewModel)
 }
 
 /** Shows an import-confirmation dialog for an incoming `brix://`/`moblin://`
