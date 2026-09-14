@@ -1,0 +1,13 @@
+Security: the stream key no longer reaches the system log, which is included in the
+diagnostics export. If you have shared a log or an export, rotate your key.
+
+The default Moblink password is no longer 1234 — a random one is generated. If you
+had a relay paired, enter the new password in Settings → Moblink.
+
+Channel weight is now a rank of 1-10 instead of 0-100: the old scale fed the bonding
+algorithm numbers of the wrong magnitude. Your values are converted automatically.
+
+Pick the exact microphone by name, not just the kind of device.
+
+Fixed: numbers no longer freeze after Stop; the "add a server" screen no longer
+flashes at launch.

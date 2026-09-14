@@ -48,8 +48,8 @@ android {
         //
         // versionCode обязан строго расти от релиза к релизу, иначе обновление
         // не доедет до тех, кто уже поставил.
-        versionCode = 3
-        versionName = "0.1.2-beta"
+        versionCode = 4
+        versionName = "0.1.3-beta"
     }
 
     // Restricts which locale-qualified resources actually get packaged into
