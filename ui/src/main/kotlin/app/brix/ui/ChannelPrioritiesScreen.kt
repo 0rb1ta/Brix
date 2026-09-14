@@ -152,7 +152,7 @@ private fun ChannelPriorityRow(
         Slider(
             value = channel.weight.toFloat(),
             onValueChange = { raw ->
-                val w = raw.toInt().coerceIn(0, 100)
+                val w = raw.toInt().coerceIn(0, 10)
                 // Live UI update only — every drag step used to hit disk
                 // (full serialize + fsync + .bak copy) up to a hundred
                 // times per drag. The actual write waits for
@@ -160,8 +160,11 @@ private fun ChannelPriorityRow(
                 if (w != channel.weight) onChange(channel.enabled, w, false)
             },
             onValueChangeFinished = { onChange(channel.enabled, channel.weight, true) },
-            valueRange = 0f..100f,
-            steps = 99,
+            // Ранг 1…10, а не 0…100: формула в SrtlaConnection.score() рассчитана
+            // на небольшое число около единицы, и сто ступеней на палец никому не
+            // нужны. Ноль оставлен — это «выключен».
+            valueRange = 0f..10f,
+            steps = 9,
             modifier = Modifier.weight(1f),
             enabled = channel.enabled,
         )

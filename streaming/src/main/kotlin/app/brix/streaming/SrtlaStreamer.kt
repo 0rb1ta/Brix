@@ -213,9 +213,28 @@ class SrtlaStreamer(
         stream = stream,
         scope = scope,
         phase = { session.phase },
+        reconnects = { _state.value.reconnectAttempt },
+        sessionNote = { sessionNote() },
         updateState = { transform -> _state.update(transform) },
         publishTick = { tick -> _uptimeTick.value = tick },
     )
+
+    /**
+     * Что за сессию не меняется — в одну строку перед заголовком CSV.
+     *
+     * Без этого чужой журнал нечем объяснить: вопрос «почему у него девять ватт»
+     * начинается с «а что он кодировал и чем». Имя энкодера спрашиваем у системы,
+     * а не берём из настроек: настройка говорит, чего мы хотели, а MediaCodec —
+     * что реально досталось.
+     */
+    private fun sessionNote(): String {
+        val video = profile?.video
+        val codec = video?.codec
+        val encoder = codec?.let { EncoderCapabilities.hardwareEncoderName(it) } ?: "?"
+        return "encoder=$encoder codec=${codec ?: "?"} " +
+            "res=${video?.width ?: "?"}x${video?.height ?: "?"} fps=${video?.fps ?: "?"} " +
+            "bitrate=${video?.bitrateKbps ?: "?"}kbps"
+    }
 
     private fun startStats() = stats.start()
 
@@ -278,9 +297,9 @@ class SrtlaStreamer(
         stats.debugLog = enabled
     }
 
-    override fun setMicSource(source: MicSource) {
+    override fun setMicSource(source: MicSource, deviceName: String) {
         _state.update { it.copy(micSource = source) }
-        stream.setMicSource(source)
+        stream.setMicSource(source, deviceName)
     }
 
     private fun startMoblink() = moblink.start()
@@ -563,15 +582,7 @@ class SrtlaStreamer(
         if (_state.value.torchOn) setTorch(false)
         updateSession(SessionPhase.Stopping, gen)
         updateSession(SessionPhase.Released, gen)
-        _state.update {
-            it.copy(
-                status = StreamStatus.Idle,
-                message = null,
-                bitrateKbps = 0,
-                error = null,
-                connectedAtElapsedMs = null,
-            )
-        }
+        _state.update { it.stopped() }
     }
 
     /** Force a transport re-establishment (e.g. notification "Reconnect" action). */

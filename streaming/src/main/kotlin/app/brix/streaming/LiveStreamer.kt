@@ -62,7 +62,7 @@ interface LiveStreamer {
      *  цифр, что и `BrixStat`, а те есть лишь на этом тракте. */
     fun setDebugLog(enabled: Boolean) = Unit
     /** Переключить предпочитаемый микрофон на лету (быстрая кнопка). */
-    fun setMicSource(source: MicSource) = Unit
+    fun setMicSource(source: MicSource, deviceName: String = "") = Unit
     fun start(url: String)
     fun stop()
     fun reconnect()

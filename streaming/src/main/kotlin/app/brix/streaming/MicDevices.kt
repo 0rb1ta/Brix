@@ -112,10 +112,28 @@ object MicDevices {
      * отключили. В обоих случаях вызывающий должен отдать выбор системе, а не
      * остаться без звука.
      */
-    fun deviceFor(context: Context, source: MicSource): AudioDeviceInfo? {
+    fun deviceFor(context: Context, source: MicSource, preferredName: String = ""): AudioDeviceInfo? {
         if (source == MicSource.AUTO) return null
-        return inputs(context).firstOrNull { sourceOf(it) == source }
+        val ofType = devicesFor(context, source)
+        // Названное устройство — если оно сейчас на месте. Иначе любое этого
+        // типа: гарнитуру могли не взять с собой, и молчащий эфир хуже, чем
+        // звук с соседнего микрофона.
+        return ofType.firstOrNull { it.productName?.toString() == preferredName && preferredName.isNotEmpty() }
+            ?: ofType.firstOrNull()
     }
+
+    /**
+     * Все подключённые устройства одного типа, в порядке, который отдала система.
+     *
+     * Нужно там, где типа мало: двух Bluetooth-гарнитур тип не различает, и
+     * выбор между ними — это выбор между именами.
+     */
+    fun devicesFor(context: Context, source: MicSource): List<AudioDeviceInfo> =
+        inputs(context).filter { sourceOf(it) == source }
+
+    /** Имена устройств этого типа — то, что видит человек в списке. */
+    fun deviceNamesFor(context: Context, source: MicSource): List<String> =
+        devicesFor(context, source).map { it.productName?.toString().orEmpty() }.filter { it.isNotBlank() }
 
     /** Наш режим в константу MediaRecorder.AudioSource. */
     fun audioSourceOf(processing: app.brix.core.AudioProcessing): Int = when (processing) {

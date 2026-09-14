@@ -132,12 +132,44 @@ class StreamService : Service() {
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
             if (screenAllowed) android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0
 
-    /** Поднять службу на переднем плане с текущим набором типов. Отказ не
-     *  должен ронять процесс: эфир важнее любой из причин отказа. */
+    /**
+     * Поднять службу на переднем плане с текущим набором типов.
+     *
+     * **Отказ бывает двух разных видов, и раньше они обрабатывались одинаково.**
+     *
+     * 1. **Первый подъём не удался** — службы на переднем плане нет вовсе. Эфир идёт
+     *    без всякой гарантии: система вправе прибить процесс в любой момент, а
+     *    человек узнает об этом по оборванной трансляции. Это настоящая беда, и
+     *    молчать о ней нельзя.
+     * 2. **Переобъявление типов отвергнуто** — служба уже на переднем плане, просто
+     *    команда пришла из фона, и система такие запросы отклоняет намеренно
+     *    («Foreground service started from background can not have
+     *    location/camera/microphone access», поймано 05.09 на кнопке уведомления).
+     *    Здесь терять нечего: набор типов остаётся прежним, эфир продолжается.
+     *
+     * Процесс не роняем ни в одном из случаев — обрывать живой эфир хуже, чем идти
+     * без гарантии. Но в логе эти два случая теперь различимы, и при первом стоит
+     * метка, по которой его видно в выгрузке диагностики.
+     */
     private fun startForegroundSafely(text: String) {
+        val wasForeground = inForeground
         runCatching { startForeground(NOTIF_ID, buildNotification(text), foregroundTypes()) }
             .onSuccess { inForeground = true }
-            .onFailure { Log.e("StreamService", "служба не поднята: ${it.message}") }
+            .onFailure {
+                if (wasForeground) {
+                    Log.w(
+                        "StreamService",
+                        "переобъявление типов отвергнуто (команда из фона), " +
+                            "служба остаётся на переднем плане: ${it.message}",
+                    )
+                } else {
+                    Log.e(
+                        "StreamService",
+                        "СЛУЖБА НЕ ПОДНЯТА: эфир идёт без гарантии переднего плана, " +
+                            "система вправе прибить процесс — ${it.message}",
+                    )
+                }
+            }
     }
     @Volatile
     private var startThread: Thread? = null

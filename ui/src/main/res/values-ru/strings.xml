@@ -306,4 +306,7 @@
     <string name="device_passport_share">Поделиться паспортом</string>
     <string name="settings_channel_priorities_profile">Профиль: %1$s</string>
     <string name="settings_priority_weight_share">Вес %1$d · %2$d%% полосы</string>
+    <string name="mic_device_pick_title">Какое устройство</string>
+    <string name="audio_group_stream">Звук в эфире</string>
+    <string name="audio_group_input">Микрофон</string>
 </resources>

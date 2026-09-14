@@ -469,6 +469,11 @@ fun AudioSettingsScreen(
             modifier = Modifier.padding(inner.verticalOnly()).padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Раздел делится по смыслу, как у Moblin: сначала УСТРОЙСТВО (откуда
+            // берём звук), потом ПОТОК (в каком виде он уходит в эфир). Раньше всё
+            // лежало вперемешку, и частота дискретизации соседствовала с выбором
+            // капсюля, хотя это про разное.
+            item { AudioGroupTitle(stringResource(R.string.audio_group_stream)) }
             item {
                 BrixCard {
                     BrixSegmentRow(
@@ -498,6 +503,7 @@ fun AudioSettingsScreen(
                     ) { viewModel.updateAudio(audio.copy(stereo = it)) }
                 }
             }
+            item { AudioGroupTitle(stringResource(R.string.audio_group_input)) }
             item {
                 BrixCard {
                     // Показываем ТОЛЬКО подключённое: пункт «Bluetooth» при
@@ -523,12 +529,47 @@ fun AudioSettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
                     )
+                    // Тип сам по себе не различает два устройства: при двух
+                    // Bluetooth-гарнитурах бралась первая попавшаяся. Поэтому
+                    // при выборе типа, у которого устройств больше одного,
+                    // спрашиваем какое именно. Одно устройство — не спрашиваем:
+                    // диалог с единственным пунктом это работа без результата.
+                    var pickFor by remember { mutableStateOf<MicSource?>(null) }
                     BrixSegmentRow(
                         title = stringResource(R.string.field_mic_source),
                         options = mics.map { it to micSourceLabel(it) },
                         selected = if (audio.micSource in mics) audio.micSource else MicSource.AUTO,
                         divider = false,
-                    ) { viewModel.updateAudio(audio.copy(micSource = it)) }
+                    ) { picked ->
+                        val names = MicDevices.deviceNamesFor(context, picked)
+                        if (names.size > 1) {
+                            pickFor = picked
+                        } else {
+                            viewModel.updateAudio(
+                                audio.copy(micSource = picked, micDeviceName = names.firstOrNull().orEmpty()),
+                            )
+                        }
+                    }
+                    // Имя выбранного устройства — под строкой. Без него человек
+                    // видит «Bluetooth» и не знает, какая из двух гарнитур.
+                    if (audio.micDeviceName.isNotBlank()) {
+                        Text(
+                            text = audio.micDeviceName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                        )
+                    }
+                    pickFor?.let { source ->
+                        MicDevicePickerDialog(
+                            names = MicDevices.deviceNamesFor(context, source),
+                            selected = audio.micDeviceName,
+                            onDismiss = { pickFor = null },
+                        ) { name ->
+                            viewModel.updateAudio(audio.copy(micSource = source, micDeviceName = name))
+                            pickFor = null
+                        }
+                    }
                 }
             }
             item {
@@ -2117,3 +2158,49 @@ private fun micSourceLabel(source: MicSource): String = stringResource(
         MicSource.USB -> R.string.mic_usb
     },
 )
+
+/**
+ * Какое именно устройство выбранного типа.
+ *
+ * Показывается только когда устройств этого типа больше одного — две
+ * Bluetooth-гарнитуры, два USB-входа. Имя берётся из `productName`, потому что
+ * `address` у Bluetooth это MAC: его нельзя ни показывать, ни хранить.
+ */
+@Composable
+private fun MicDevicePickerDialog(
+    names: List<String>,
+    selected: String,
+    onDismiss: () -> Unit,
+    onPick: (String) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.mic_device_pick_title)) },
+        text = {
+            Column {
+                names.forEach { name ->
+                    BrixNavRow(
+                        title = name,
+                        value = if (name == selected) "✓" else null,
+                        divider = name != names.last(),
+                        onClick = { onPick(name) },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel)) }
+        },
+    )
+}
+
+/** Заголовок смысловой группы внутри экрана настроек звука. */
+@Composable
+private fun AudioGroupTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
+    )
+}

@@ -246,6 +246,7 @@ class SrtlaStream(
 
     @Volatile
     private var micSource = MicSource.AUTO
+    private var micDeviceName = ""
 
     /** Общие настройки звука: усиление и предпочитаемый микрофон. */
     fun applyAudioSettings(audio: app.brix.core.AudioSettings) {
@@ -261,18 +262,20 @@ class SrtlaStream(
         micGain = audio.micGain
         applyMicGain()
         micSource = audio.micSource
+        micDeviceName = audio.micDeviceName
         applyMicSource()
     }
 
-    fun setMicSource(source: MicSource) {
+    fun setMicSource(source: MicSource, deviceName: String = "") {
         micSource = source
+        micDeviceName = deviceName
         applyMicSource()
     }
 
     /** Предпочитаемый микрофон. Подтверждается там же, где мьют и усиление:
      *  после смены источника звука предпочтение сбрасывается вместе с ним. */
     fun applyMicSource() {
-        val device = MicDevices.deviceFor(context, micSource)
+        val device = MicDevices.deviceFor(context, micSource, micDeviceName)
         val mic = when (val source = audioSource) {
             is OverlayAudioSource -> source.micSourceForPreference()
             is MicrophoneSource -> source

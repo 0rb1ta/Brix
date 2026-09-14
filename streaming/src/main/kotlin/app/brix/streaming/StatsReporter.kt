@@ -25,6 +25,12 @@ internal class StatsReporter(
     private val stream: SrtlaStream,
     private val scope: CoroutineScope,
     private val phase: () -> SessionPhase,
+    /** Сколько раз за сессию переподключались. В логе этого не было, а при
+     *  разборе чужого отчёта «рвалось ли и сколько раз» — первый вопрос. */
+    private val reconnects: () -> Int,
+    /** Что за сессию не меняется — энкодер, кодек, разрешение. Пишется одной
+     *  строкой перед заголовком CSV: в каждой секунде это был бы дубль. */
+    private val sessionNote: () -> String,
     private val updateState: ((StreamState) -> StreamState) -> Unit,
     /** Тик часов эфира. Отдельно от [updateState] нарочно: см. LiveStreamer.uptimeTick. */
     private val publishTick: (Long) -> Unit,
@@ -40,7 +46,7 @@ internal class StatsReporter(
 
     fun start() {
         if (job?.isActive == true) return
-        if (debugLog) recorder.start()
+        if (debugLog) recorder.start(sessionNote())
         job = scope.launch {
             var prevBytes = mapOf<String, Long>()
             PeriodicTasks.register("stats", 1000).use {
@@ -110,7 +116,7 @@ internal class StatsReporter(
         Log.i(
             "BrixStat",
             "phase=${phase()} srtconn=${srt.connected} srtrtt=${srt.rttMs.toInt()} " +
-                "srtinf=${srt.inFlight} srtdrop=${srt.droppedPackets} " +
+                "srtinf=${srt.inFlight} srtdrop=${srt.droppedPackets} reconn=${reconnects()} " +
                 "rate=${"%.1f".format(java.util.Locale.US, srt.sendRateMbps)}Mbps " +
                 "abr=${if (srt.abrEnabled) srt.abrKbps.toString() else "off"} " +
                 "therm=${thermalStatus()} | tasks=[${PeriodicTasks.snapshot()}] | $linkText",
@@ -121,6 +127,7 @@ internal class StatsReporter(
             // не хуже — лишь бы это была не запятая.
             recorder.record(
                 phase = phase().toString(),
+                reconnects = reconnects(),
                 transport = listOf(
                     srt.connected.toString(),
                     srt.rttMs.toInt().toString(),

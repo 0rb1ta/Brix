@@ -143,6 +143,19 @@ data class AudioSettings(
      *  или ветрозащита легко режут уровень так, что в эфире шёпот. */
     val micGain: Float = 1f,
     val micSource: MicSource = MicSource.AUTO,
+    /**
+     * Какое именно устройство выбранного типа, по человеческому имени
+     * (`AudioDeviceInfo.productName` — «WH-1000XM4»).
+     *
+     * Тип сам по себе не различает два устройства: при двух Bluetooth-гарнитурах
+     * бралась первая попавшаяся. Имя переживает переподключение, в отличие от
+     * `id`, и — в отличие от `address` у Bluetooth — не является MAC-адресом,
+     * поэтому его можно хранить и показывать.
+     *
+     * Пусто — «любое устройство этого типа». Если названного устройства сейчас
+     * нет, откатываемся на тип: остаться без звука хуже, чем взять соседний.
+     */
+    val micDeviceName: String = "",
     val processing: AudioProcessing = AudioProcessing.CAMCORDER,
 )
 
@@ -186,7 +199,18 @@ data class ConnectionPriority(
     /** Canonical network key: WIFI / CELLULAR / ETHERNET. */
     val name: String,
     val enabled: Boolean = true,
-    /** Relative weight. A channel's share is weight / Σ(enabled weights). */
+    /**
+     * Ранг канала, 1…10. Доля канала — weight / Σ(весов включённых), 0 — выключен.
+     *
+     * **Почему 1…10, а не 0…100 как было.** Вес уходит в `SrtlaConnection.score()`,
+     * а там формула `scaledPriority = 1 + (priority - 1) * factor` — она пришла из
+     * srtla/BELABOX и рассчитана на РАНГ, небольшое число около единицы. Мы же
+     * подставляли туда 0–100: при весе 41 получался разброс в сорок раз там, где
+     * алгоритм ожидал разы. Сто ступеней на палец вдобавок никому не нужны, а само
+     * число ни о чём не говорит — 4 против 10 и 41 против 98 дают одно и то же.
+     *
+     * Старые значения переводятся в `migrate()`.
+     */
     val weight: Int = 0,
 )
 
@@ -207,6 +231,7 @@ data class AppearanceSettings(
 data class MoblinkSettings(
     val enabled: Boolean = false,
     val port: Int = 7777,
+    /** Пароль релея. Генерируется при первой установке — см. [generateMoblinkPassword]. */
     val password: String = "1234",
     /** Weight applied to every connected relay's channel in the SRTLA aggregate
      *  (same scale as [ConnectionPriority.weight]). Relays are dynamic in count,
@@ -581,17 +606,57 @@ data class AppSettings(
         } else {
             audio
         }
+        // Веса каналов переведены из 0…100 в ранг 1…10 (14.09). Значение больше
+        // десяти заведомо старое — делим и округляем вверх, чтобы 1…9 не схлопнулись
+        // в ноль и канал не выключился молча. Значения 10 и меньше уже годны как ранг
+        // и остаются как есть, поэтому миграция идемпотентна.
+        val migratedProfiles = streamProfiles.map { profile ->
+            profile.copy(
+                srtConnectionPriorities = profile.srtConnectionPriorities.map { p ->
+                    if (p.weight > 10) p.copy(weight = ((p.weight + 9) / 10).coerceIn(1, 10)) else p
+                },
+            )
+        }
+        // Пароль «1234» был значением по умолчанию до 14.09, то есть общеизвестным
+        // для всех, у кого стоит приложение. Меняем на случайный. Настроенную пару
+        // это рассорило бы, но Moblink со вторым телефоном ни разу не работал —
+        // ломать нечего, а оставлять известный пароль у службы в локальной сети
+        // нельзя. Миграция идемпотентна: после замены значение уже не «1234».
+        val migratedMoblink = if (moblink.password == "1234") {
+            moblink.copy(password = generateMoblinkPassword())
+        } else {
+            moblink
+        }
         return copy(
+            moblink = migratedMoblink,
             serverProfiles = migratedServers,
             overlays = migratedOverlays,
             audio = migratedAudio,
+            streamProfiles = migratedProfiles,
         )
     }
 }
 
+/**
+ * Пароль для Moblink, пригодный к вводу руками.
+ *
+ * **Почему не длинный hex.** Этот пароль человек читает с одного телефона и набирает
+ * на другом, обычно на улице. Тридцать два знака никто не введёт, а значит заменит
+ * на «1234» — и мы вернёмся туда, откуда ушли. Восемь знаков из однозначного
+ * алфавита дают около сорока бит: для службы, доступной только в своей локальной
+ * сети и только пока идёт эфир, этого достаточно.
+ *
+ * Из алфавита выброшены пары, которые путают при наборе: 0 и o, 1 и l с i.
+ */
+fun generateMoblinkPassword(): String {
+    val alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+    val random = java.security.SecureRandom()
+    return (1..8).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")
+}
+
 fun defaultConnectionPriorities(): List<ConnectionPriority> = listOf(
-    ConnectionPriority("WIFI", enabled = true, weight = 80),
-    ConnectionPriority("CELLULAR", enabled = true, weight = 20),
+    ConnectionPriority("WIFI", enabled = true, weight = 8),
+    ConnectionPriority("CELLULAR", enabled = true, weight = 2),
     ConnectionPriority("ETHERNET", enabled = false, weight = 0),
 )
 

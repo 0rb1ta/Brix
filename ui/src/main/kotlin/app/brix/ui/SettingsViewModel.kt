@@ -40,7 +40,22 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     // Start from defaults so the first composition is instant, then load the
     // persisted settings off the main thread (H13: a synchronous disk + JSON
     // read in the ViewModel constructor blocked the UI on cold start).
-    private val _settings = MutableStateFlow(defaultAppSettings())
+    /**
+     * Тот самый объект-заглушка, с которого начинается жизнь до чтения диска.
+     *
+     * Хранится отдельно, чтобы по нему можно было спросить «а это уже настоящие
+     * настройки или ещё подстава» — сравнением ПО ССЫЛКЕ. Флаг [settingsLoaded] на
+     * этот вопрос не отвечает: он живёт в своём потоке и поднимается раньше, чем
+     * новые настройки доходят до экрана. В эту щель успевал нарисоваться экран
+     * «добавьте сервер» при каждом запуске (14.09, поймано метками в логе:
+     * `settingsLoaded=true профилей=0` при трёх профилях в модели).
+     */
+    private val placeholder = defaultAppSettings()
+
+    /** Настоящие ли это настройки, или ещё заглушка до чтения диска. */
+    fun isPlaceholder(candidate: AppSettings): Boolean = candidate === placeholder
+
+    private val _settings = MutableStateFlow(placeholder)
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
     // Distinguishes "still the placeholder defaultAppSettings()" from a real

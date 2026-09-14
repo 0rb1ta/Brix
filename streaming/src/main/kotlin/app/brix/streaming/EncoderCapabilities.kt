@@ -79,6 +79,27 @@ object EncoderCapabilities {
         chosen
     }.getOrDefault(-1)
 
+    /**
+     * Имя аппаратного энкодера, который система даст под этот кодек.
+     *
+     * Для журнала сессии: настройка говорит, чего мы хотели, а это — что реально
+     * досталось. На S21 аппаратных энкодеров под один кодек несколько
+     * (`c2.exynos.*` и старые `OMX.Exynos.*`), и какой возьмёт библиотека, из
+     * настроек не видно.
+     */
+    fun hardwareEncoderName(codec: Codec): String = runCatching {
+        val mime = mimeFor(codec)
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+            .firstOrNull { info ->
+                info.isEncoder &&
+                    info.supportedTypes.any { it.equals(mime, ignoreCase = true) } &&
+                    (
+                        android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q ||
+                            info.isHardwareAccelerated
+                        )
+            }?.name ?: "?"
+    }.getOrDefault("?")
+
     /** @return true, если хотя бы один энкодер для этого кодека держит CBR. */
     fun isCbrSupported(codec: Codec): Boolean = runCatching {
         val mime = mimeFor(codec)

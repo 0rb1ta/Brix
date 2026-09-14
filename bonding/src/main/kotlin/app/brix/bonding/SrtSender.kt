@@ -95,7 +95,16 @@ class SrtSender(
     }
 
     private fun startLocked() {
-        android.util.Log.w("Srtla", "srt-sender: start() streamId=$streamId")
+        // streamId НЕ логируем целиком: у SRTLA туда уходит ?srtauth=<ключ>,
+        // то есть ключ трансляции. Тег «Srtla» входит в белый список логов,
+        // которые попадают в выгрузку диагностики, а её человек отдаёт чужим
+        // людям — 14.09 мы вычистили ключи из настроек, а этот путь пропустили.
+        // Для отладки хватает факта наличия и длины: по ним видно, подставился
+        // ли streamId вообще и не обрезался ли он.
+        android.util.Log.w(
+            "Srtla",
+            "srt-sender: start() streamId: есть=${!streamId.isNullOrEmpty()} длина=${streamId?.length ?: 0}",
+        )
         startTime = nowMicros()
         latestReceivedPacketTime = nowMicros()
         latestOutputPacketsTime = 0

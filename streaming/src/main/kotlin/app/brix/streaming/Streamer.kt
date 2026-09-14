@@ -320,6 +320,7 @@ class Streamer(context: Context) : ConnectChecker, LiveStreamer {
             mic.audioSource = MicDevices.audioSourceOf(audio.processing)
         }
         preferredMic = audio.micSource
+        preferredMicName = audio.micDeviceName
         _state.update { it.copy(micSource = audio.micSource) }
         applyMicSource()
     }
@@ -332,9 +333,11 @@ class Streamer(context: Context) : ConnectChecker, LiveStreamer {
 
     @Volatile
     private var preferredMic = MicSource.AUTO
+    private var preferredMicName = ""
 
-    override fun setMicSource(source: MicSource) {
+    override fun setMicSource(source: MicSource, deviceName: String) {
         preferredMic = source
+        preferredMicName = deviceName
         _state.update { it.copy(micSource = source) }
         applyMicSource()
     }
@@ -346,7 +349,7 @@ class Streamer(context: Context) : ConnectChecker, LiveStreamer {
         // HAL вправе отказать, и отказ надо видеть: иначе выбор «у камеры»
         // молча остаётся выбором системы.
         val applied = runCatching {
-            mic.setPreferredDevice(MicDevices.deviceFor(appContext, preferredMic))
+            mic.setPreferredDevice(MicDevices.deviceFor(appContext, preferredMic, preferredMicName))
         }.getOrDefault(false)
         if (!applied) {
             Log.w("BrixMic", "устройство не принято HAL: $preferredMic — звук с микрофона по выбору системы")
@@ -396,9 +399,7 @@ class Streamer(context: Context) : ConnectChecker, LiveStreamer {
         if (stream.isStreaming) stream.stopStream()
         updateSession(SessionPhase.Stopping, gen)
         updateSession(SessionPhase.Released, gen)
-        _state.update {
-            it.copy(status = StreamStatus.Idle, message = null, bitrateKbps = 0, error = null, connections = emptyList())
-        }
+        _state.update { it.stopped() }
     }
 
     @Synchronized

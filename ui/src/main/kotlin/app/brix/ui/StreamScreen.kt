@@ -245,12 +245,27 @@ fun StreamScreen(settings: AppSettings, settingsViewModel: SettingsViewModel, mo
         }
     }
 
+    // Настройки читаются с диска асинхронно (SettingsViewModel: первая композиция
+    // должна быть мгновенной, синхронное чтение в конструкторе блокировало холодный
+    // старт). До их прихода мы живём на умолчаниях, а в умолчаниях серверов нет —
+    // и экран «добавьте сервер» успевал мелькнуть при КАЖДОМ запуске, даже когда
+    // всё давно настроено. Флаг settingsLoaded ровно для этого и заведён, но до
+    // 14.09 нигде не использовался.
+    // Спрашиваем у ТОГО ЖЕ объекта, который рисуем: заглушка он или настоящие
+    // настройки. Отдельный флаг здесь не годится — он поднимается раньше, чем
+    // настройки доезжают до экрана, и в эту щель приглашение и пролезало.
+    val settingsReady = !settingsViewModel.isPlaceholder(settings)
+
     Box(modifier = modifier.fillMaxSize()) {
         if (server == null) {
-            NoServerPrompt(onOpenSettings = {
-                settingsRoute = SettingsRoute.Menu
-                showSettings = true
-            })
+            // Пока не прочитали — не утверждаем, что сервера нет. Пустой кадр
+            // длится доли секунды и честнее ложного приглашения.
+            if (settingsReady) {
+                NoServerPrompt(onOpenSettings = {
+                    settingsRoute = SettingsRoute.Menu
+                    showSettings = true
+                })
+            }
         } else {
             key(server.id) {
                 ImmersiveStream(

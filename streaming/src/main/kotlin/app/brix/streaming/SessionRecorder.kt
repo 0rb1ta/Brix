@@ -43,7 +43,7 @@ internal class SessionRecorder(private val appContext: Context) {
 
     val isActive: Boolean get() = writer != null
 
-    fun start() {
+    fun start(note: String? = null) {
         if (writer != null) return
         val dir = File(appContext.getExternalFilesDir(null), "debug")
         if (!dir.exists() && !dir.mkdirs()) {
@@ -54,6 +54,15 @@ internal class SessionRecorder(private val appContext: Context) {
         val file = File(dir, "session-$stamp.csv")
         runCatching {
             val w = BufferedWriter(FileWriter(file, true))
+            // Строка-заметка перед заголовком: то, что за сессию не меняется —
+            // энкодер, кодек, разрешение. Держать это отдельной колонкой в каждой
+            // секунде значило бы дублировать одно и то же тысячу раз, а без него
+            // чужой отчёт нечем объяснить: «почему у него 9 Вт» начинается с
+            // вопроса «а что он вообще кодировал и чем».
+            if (!note.isNullOrBlank()) {
+                w.write("# $note")
+                w.newLine()
+            }
             w.write(HEADER)
             w.newLine()
             w.flush()
@@ -79,7 +88,7 @@ internal class SessionRecorder(private val appContext: Context) {
      * @param transport уже собранные цифры транспорта, в порядке колонок
      *   [HEADER] после `charging`.
      */
-    fun record(phase: String, transport: String) {
+    fun record(phase: String, reconnects: Int, transport: String) {
         val w = writer ?: return
         val battery = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
@@ -159,6 +168,7 @@ internal class SessionRecorder(private val appContext: Context) {
             voltMv.toString(),
             fmt(watts),
             if (plugged) "1" else "0",
+            reconnects.toString(),
             transport,
         ).joinToString(",")
 
@@ -188,6 +198,6 @@ internal class SessionRecorder(private val appContext: Context) {
         // «идёт ли зарядка». Разница не словесная — именно она испортила
         // разбор сессии 07.09.
         const val HEADER = "t_s,wall,phase,therm,batt_pct,batt_temp_c,curr_ua,volt_mv,watts," +
-            "plugged,srt_conn,srt_rtt_ms,srt_inflight,srt_dropped,rate_mbps,abr_kbps,links"
+            "plugged,reconnects,srt_conn,srt_rtt_ms,srt_inflight,srt_dropped,rate_mbps,abr_kbps,links"
     }
 }

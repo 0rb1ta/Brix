@@ -306,4 +306,7 @@
     <string name="device_passport_share">Share passport</string>
     <string name="settings_channel_priorities_profile">Profile: %1$s</string>
     <string name="settings_priority_weight_share">Weight %1$d · %2$d%% of bandwidth</string>
+    <string name="mic_device_pick_title">Which device</string>
+    <string name="audio_group_stream">Stream audio</string>
+    <string name="audio_group_input">Microphone</string>
 </resources>

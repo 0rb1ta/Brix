@@ -2,6 +2,7 @@ package app.brix.core
 
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -51,7 +52,13 @@ class SettingsStoreTest {
     fun `отсутствующий файл — это не ошибка, а пустые настройки`() {
         val result = store().load()
         assertTrue(result.isSuccess)
-        assertEquals(AppSettings(), result.getOrNull())
+        val loaded = result.getOrNull()!!
+        // Всё по умолчанию, КРОМЕ пароля Moblink: он генерируется при первой
+        // установке (14.09). Раньше здесь сверялось с `AppSettings()` целиком, и
+        // тест честно упал, когда поведение поменяли.
+        assertEquals(AppSettings(moblink = loaded.moblink), loaded)
+        assertNotEquals("пароль не остался общеизвестным", "1234", loaded.moblink.password)
+        assertEquals(8, loaded.moblink.password.length)
     }
 
     @Test
