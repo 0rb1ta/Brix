@@ -128,7 +128,7 @@
     <string name="hud_total_mbps">%.1f Mbps total</string>
     <string name="btn_export_diagnostics">Export diagnostics</string>
     <string name="diagnostics_crashes">Saved crash reports: %1$d</string>
-    <string name="diagnostics_info">Includes device, settings (passphrases redacted), logs and crash reports. There is no backend, so nothing is sent automatically — share the file yourself.</string>
+    <string name="diagnostics_info">Includes the phone model, transport settings without addresses or keys, logs and crash reports. There is no backend, so nothing is sent automatically — share the file yourself.</string>
 
     <string name="camera_stabilization">Stabilization</string>
     <string name="camera_stabilization_hint">Electronic video stabilization, if the camera supports it — less shake in frame</string>
@@ -300,4 +300,10 @@
     <string name="field_stream_id">Stream ID</string>
     <string name="field_stream_id_hint">Whatever follows streamid= in the URL, usually together with the srtauth key. Leave empty if it is already part of the URL.</string>
     <string name="field_url_hint_srtla">srtla://host:5000?streamid=… bonds several links. srt://host:4000?streamid=… is a plain SRT receiver, one link.</string>
+    <string name="settings_device_passport">Device passport</string>
+    <string name="device_passport_info">What your particular hardware can do: encoders and constant-bitrate support, lenses and their capture modes, audio inputs. It contains no stream keys, no server addresses and nothing that ties the report to you. Nothing is sent on its own — you see the whole report and you send it.</string>
+    <string name="device_passport_collecting">Querying the hardware…</string>
+    <string name="device_passport_share">Share passport</string>
+    <string name="settings_channel_priorities_profile">Profile: %1$s</string>
+    <string name="settings_priority_weight_share">Weight %1$d · %2$d%% of bandwidth</string>
 </resources>

@@ -99,6 +99,7 @@ sealed interface SettingsRoute {
     data object Advanced : SettingsRoute
     data object About : SettingsRoute
     data object Diagnostics : SettingsRoute
+    data object DevicePassport : SettingsRoute
     data class StreamProfileEdit(val profileId: String?) : SettingsRoute
     data class ServerProfileEdit(val profileId: String?) : SettingsRoute
     data class OverlayEdit(val overlayId: String?) : SettingsRoute
@@ -259,7 +260,8 @@ fun CategoryHome(
                 item {
                     BrixCard {
                         BrixNavRow(stringResource(R.string.settings_about_version), divider = true, onClick = { onRoute(SettingsRoute.About) })
-                        BrixNavRow(stringResource(R.string.settings_diagnostics), divider = false, onClick = { onRoute(SettingsRoute.Diagnostics) })
+                        BrixNavRow(stringResource(R.string.settings_diagnostics), divider = true, onClick = { onRoute(SettingsRoute.Diagnostics) })
+                        BrixNavRow(stringResource(R.string.settings_device_passport), divider = false, onClick = { onRoute(SettingsRoute.DevicePassport) })
                     }
                 }
             }
@@ -361,7 +363,7 @@ internal fun SettingsEditTopBar(
  *  попал, но и из какой категории сюда попал (список категорий слева не
  *  подсвечивает текущий подэкран, только категорию). */
 @Composable
-private fun crumb(categoryRes: Int, screenRes: Int): String =
+internal fun crumb(categoryRes: Int, screenRes: Int): String =
     "${stringResource(categoryRes)} · ${stringResource(screenRes)}"
 
 @Composable

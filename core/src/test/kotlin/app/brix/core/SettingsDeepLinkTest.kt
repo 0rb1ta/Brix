@@ -124,7 +124,6 @@ class SettingsDeepLinkTest {
                 name = "bbox",
                 type = ServerType.SRTLA,
                 baseUrl = "srtla://example.com:5000?streamid=live/stream/x",
-                passphrase = "hunter2",
                 streamId = "live/stream/x?srtauth=SECRETAUTH",
             ),
         ),
@@ -135,7 +134,6 @@ class SettingsDeepLinkTest {
         val link = SettingsDeepLink.encode(secretSettings())
         assertFalse("ключ RTMP в пути baseUrl", link.contains("SECRETKEY"))
         assertFalse("srtauth в streamId", link.contains("SECRETAUTH"))
-        assertFalse("пароль SRT", link.contains("hunter2"))
     }
 
     @Test
@@ -145,7 +143,6 @@ class SettingsDeepLinkTest {
         assertEquals("rtmp://example.com:1935/live", rtmp.baseUrl)
         val srtla = decoded.serverProfiles.first { it.id == "srtla" }
         assertEquals("srtla://example.com:5000", srtla.baseUrl)
-        assertEquals("", srtla.passphrase)
         assertEquals("", srtla.streamId)
         assertEquals("bbox", srtla.name)
         assertEquals(ServerType.SRTLA, srtla.type)
@@ -156,7 +153,6 @@ class SettingsDeepLinkTest {
         val link = SettingsDeepLink.encode(secretSettings(), includeSecrets = true)
         val decoded = SettingsDeepLink.decode(link)!!
         val srtla = decoded.serverProfiles.first { it.id == "srtla" }
-        assertEquals("hunter2", srtla.passphrase)
         assertEquals("live/stream/x?srtauth=SECRETAUTH", srtla.streamId)
         assertEquals(
             "rtmp://example.com:1935/live/SECRETKEY",

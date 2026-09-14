@@ -47,6 +47,33 @@ data class SharedConfig(
  * turning an incoming `Intent.data` into a string, or building an
  * `android.net.Uri` from what [encode] returns to hand to a share sheet).
  */
+/**
+ * Убирает из профиля всё, чем можно вещать от имени владельца.
+ *
+ * Ключ прячется в двух местах, и упустить любое — значит не сделать
+ * ничего: `streamId` (у SRTLA туда уходит `?srtauth=<ключ>`) и сам
+ * `baseUrl` — у RTMP ключ трансляции лежит прямо в пути
+ * (`rtmp://host/live/<ключ>`).
+ *
+ * Из `baseUrl` срезаем строку запроса целиком и последний сегмент пути,
+ * если сегментов больше одного. Это эвристика, и она намеренно грубая:
+ * лучше отдать получателю адрес, который придётся дописать руками, чем
+ * тихо разослать ключ. Ради этого же остаётся имя, тип и порт — переносится
+ * настройка, а не доступ.
+ */
+fun ServerProfile.withoutSecrets(): ServerProfile = copy(
+    streamId = "",
+    baseUrl = baseUrl.substringBefore('?').let { noQuery ->
+        val schemeEnd = noQuery.indexOf("://")
+        val authorityStart = if (schemeEnd >= 0) schemeEnd + 3 else 0
+        val pathStart = noQuery.indexOf('/', authorityStart)
+        if (pathStart < 0) return@let noQuery
+        val path = noQuery.substring(pathStart).trim('/')
+        if (path.isEmpty() || !path.contains('/')) return@let noQuery
+        noQuery.substring(0, pathStart) + "/" + path.substringBeforeLast('/')
+    },
+)
+
 object SettingsDeepLink {
     const val SCHEME = "brix"
     private const val HOST = "settings"
@@ -57,33 +84,6 @@ object SettingsDeepLink {
         encodeDefaults = true
     }
 
-    /**
-     * Убирает из профиля всё, чем можно вещать от имени владельца.
-     *
-     * Ключ прячется в трёх местах, и упустить хоть одно — значит не сделать
-     * ничего: `passphrase` (пароль шифрования SRT), `streamId` (у SRTLA туда
-     * уходит `?srtauth=<ключ>`) и сам `baseUrl` — у RTMP ключ трансляции лежит
-     * прямо в пути (`rtmp://host/live/<ключ>`).
-     *
-     * Из `baseUrl` срезаем строку запроса целиком и последний сегмент пути,
-     * если сегментов больше одного. Это эвристика, и она намеренно грубая:
-     * лучше отдать получателю адрес, который придётся дописать руками, чем
-     * тихо разослать ключ. Ради этого же остаётся имя, тип и порт — переносится
-     * настройка, а не доступ.
-     */
-    fun ServerProfile.withoutSecrets(): ServerProfile = copy(
-        passphrase = "",
-        streamId = "",
-        baseUrl = baseUrl.substringBefore('?').let { noQuery ->
-            val schemeEnd = noQuery.indexOf("://")
-            val authorityStart = if (schemeEnd >= 0) schemeEnd + 3 else 0
-            val pathStart = noQuery.indexOf('/', authorityStart)
-            if (pathStart < 0) return@let noQuery
-            val path = noQuery.substring(pathStart).trim('/')
-            if (path.isEmpty() || !path.contains('/')) return@let noQuery
-            noQuery.substring(0, pathStart) + "/" + path.substringBeforeLast('/')
-        },
-    )
 
     /**
      * Builds a full `brix://settings?config=...` URI string.

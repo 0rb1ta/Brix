@@ -131,7 +131,7 @@
     <string name="hud_total_mbps">%.1f Mbps суммарно</string>
     <string name="btn_export_diagnostics">Экспорт диагностики</string>
     <string name="diagnostics_crashes">Сохранённых отчётов о сбоях: %1$d</string>
-    <string name="diagnostics_info">Содержит устройство, настройки (пароли скрыты), лог и отчёты о сбоях. Без бэкенда данные не уходят автоматически — отправьте файл сами.</string>
+    <string name="diagnostics_info">Содержит модель телефона, настройки транспорта без адресов и ключей, лог и отчёты о сбоях. Без бэкенда данные не уходят автоматически — отправьте файл сами.</string>
 
     <string name="camera_stabilization">Стабилизация</string>
     <string name="camera_stabilization_hint">Электронная стабилизация видео, если поддерживается камерой — меньше тряски в кадре</string>
@@ -300,4 +300,10 @@
     <string name="field_stream_id">Идентификатор потока</string>
     <string name="field_stream_id_hint">То, что идёт после streamid= в адресе — обычно вместе с ключом srtauth. Оставьте пустым, если он уже вписан в адрес.</string>
     <string name="field_url_hint_srtla">srtla://хост:5000?streamid=… — бондинг нескольких каналов. srt://хост:4000?streamid=… — обычный SRT-приёмник, один канал.</string>
+    <string name="settings_device_passport">Паспорт устройства</string>
+    <string name="device_passport_info">Что умеет именно ваше железо: энкодеры и поддержка постоянного битрейта, объективы и их режимы съёмки, входы звука. Ни ключей трансляции, ни адресов серверов, ни чего-либо, что связывает отчёт с вами, здесь нет. Ничего не уходит само — отчёт виден целиком, отправляете его вы.</string>
+    <string name="device_passport_collecting">Опрашиваем железо…</string>
+    <string name="device_passport_share">Поделиться паспортом</string>
+    <string name="settings_channel_priorities_profile">Профиль: %1$s</string>
+    <string name="settings_priority_weight_share">Вес %1$d · %2$d%% полосы</string>
 </resources>

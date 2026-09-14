@@ -2117,6 +2117,10 @@ private fun SettingsPanelContent(
                 onBack = { onRoute(SettingsRoute.Menu) },
                 modifier = Modifier.weight(1f),
             )
+            SettingsRoute.DevicePassport -> DevicePassportScreen(
+                onBack = { onRoute(SettingsRoute.Menu) },
+                modifier = Modifier.weight(1f),
+            )
             SettingsRoute.Overlay -> OverlaySettingsScreen(
                 viewModel = viewModel,
                 onEdit = { id -> onRoute(SettingsRoute.OverlayEdit(id)) },

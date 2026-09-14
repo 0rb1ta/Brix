@@ -400,7 +400,6 @@ data class ServerProfile(
     @Deprecated("Kept only for schema migration (url -> baseUrl).")
     val url: String? = null,
     val baseUrl: String = "",
-    val passphrase: String = "",
     val streamId: String = "",
     val latencyMs: Int = 2000,
     /** Брать при разрешении имени только IPv4. Некоторые операторы и приёмники

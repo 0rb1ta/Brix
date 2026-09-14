@@ -1,6 +1,8 @@
 package app.brix.ui
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -53,8 +55,22 @@ fun ChannelPrioritiesScreen(
         Column(
             modifier = Modifier
                 .padding(innerPadding.verticalOnly())
+                // Каналов ровно столько, сколько их у телефона, плюс релеи
+                // Moblink — в экран они не помещаются, и без прокрутки нижние
+                // просто обрезались: Ethernet (USB) был недостижим совсем.
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
+            // Экран правит приоритеты ВЫБРАННОГО профиля, а не все сразу. Без
+            // имени профиля человек с двумя профилями правит один и считает,
+            // что правит глобально, — а потом «настройки не применяются».
+            profile?.let {
+                Text(
+                    text = stringResource(R.string.settings_channel_priorities_profile, it.name),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
             Text(
                 text = stringResource(R.string.settings_channel_priorities_hint),
                 style = MaterialTheme.typography.bodySmall,
@@ -98,14 +114,19 @@ private fun ChannelPriorityRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp),
+            // Каналов у телефона три плюс релеи Moblink. Раньше строка занимала
+            // три яруса (имя, подпись, регулятор во всю ширину) и на экран
+            // влезали две — Ethernet (USB) обрезался и был недостижим.
+            // Теперь всё в одну линию: имя с числами, регулятор, тумблер.
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.width(150.dp)) {
             Text(
                 text = channelDisplayName(channel.name),
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.bodyLarge,
                 fontFamily = FontFamily.Monospace,
+                maxLines = 1,
                 color = if (channel.enabled) {
                     MaterialTheme.colorScheme.onSurface
                 } else {
@@ -113,28 +134,38 @@ private fun ChannelPriorityRow(
                 },
             )
             Text(
-                text = "${stringResource(R.string.settings_priority_weight)} · $sharePercent%",
+                // Раньше здесь стояло «Вес · 62%», и это было враньё: подпись
+                // называла вес, а показывала долю полосы. Числа разные — вес
+                // задаётся регулятором, доля считается от суммы весов всех
+                // включённых каналов, — и путать их нельзя.
+                text = stringResource(
+                    R.string.settings_priority_weight_share,
+                    channel.weight,
+                    sharePercent,
+                ),
                 style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Slider(
-                value = channel.weight.toFloat(),
-                onValueChange = { raw ->
-                    val w = raw.toInt().coerceIn(0, 100)
-                    // Live UI update only — every drag step used to hit disk
-                    // (full serialize + fsync + .bak copy) up to a hundred
-                    // times per drag. The actual write waits for
-                    // onValueChangeFinished below.
-                    if (w != channel.weight) onChange(channel.enabled, w, false)
-                },
-                onValueChangeFinished = { onChange(channel.enabled, channel.weight, true) },
-                valueRange = 0f..100f,
-                steps = 99,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = channel.enabled,
-            )
         }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(12.dp))
+        Slider(
+            value = channel.weight.toFloat(),
+            onValueChange = { raw ->
+                val w = raw.toInt().coerceIn(0, 100)
+                // Live UI update only — every drag step used to hit disk
+                // (full serialize + fsync + .bak copy) up to a hundred
+                // times per drag. The actual write waits for
+                // onValueChangeFinished below.
+                if (w != channel.weight) onChange(channel.enabled, w, false)
+            },
+            onValueChangeFinished = { onChange(channel.enabled, channel.weight, true) },
+            valueRange = 0f..100f,
+            steps = 99,
+            modifier = Modifier.weight(1f),
+            enabled = channel.enabled,
+        )
+        Spacer(Modifier.width(12.dp))
         Switch(
             checked = channel.enabled,
             onCheckedChange = { enabled -> onChange(enabled, channel.weight, true) },
