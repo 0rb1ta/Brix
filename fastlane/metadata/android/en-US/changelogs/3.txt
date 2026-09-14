@@ -1,0 +1,10 @@
+Device passport: Settings → About → Device passport. What your hardware
+actually supports — encoders, bitrate modes, cameras, audio inputs. The report
+is shown in full and sent only by you.
+
+The diagnostics export no longer carries the stream key, your server address,
+channel names or the donation widget token. If you shared one before, rotate
+your stream key.
+
+Channel priorities: all links fit on the screen, the edited stream profile is
+named, and the caption distinguishes a link's weight from its bandwidth share.
