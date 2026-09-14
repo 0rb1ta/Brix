@@ -1,0 +1,16 @@
+One "Scene widgets" list instead of "Overlays" and "Browser widgets". You pick a
+type when adding: donation alert, web page, image or text. Your widgets are
+migrated automatically, including which scenes they belong to.
+
+Image and text widgets do not start a browser at all: one WebView cost 9-10% of a
+CPU core. Text supports {time}, {battery} and {bitrate}.
+
+Donation alerts are one block now: picture, name with amount, message - and the
+whole block scales with its window. The caption is rendered at the frame's own
+resolution, so it no longer blurs on a large window.
+
+Fixed: the placement frame lied about the size by 2.75x, so a window dragged to
+"half the screen" was stored as 16% of the width. Fixed: white flash at startup.
+
+A snapshot button saves the current frame to the gallery. The HUD shows the
+carrier name instead of CELLULAR. An intro animation on launch.
