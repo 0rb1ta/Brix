@@ -13,4 +13,5 @@ Fixed: the placement frame lied about the size by 2.75x, so a window dragged to
 "half the screen" was stored as 16% of the width. Fixed: white flash at startup.
 
 A snapshot button saves the current frame to the gallery. The HUD shows the
-carrier name instead of CELLULAR. An intro animation on launch.
+carrier name instead of CELLULAR. An intro animation on launch - drawn by code,
+so it adds nothing to the download size.
