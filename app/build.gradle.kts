@@ -48,8 +48,8 @@ android {
         //
         // versionCode обязан строго расти от релиза к релизу, иначе обновление
         // не доедет до тех, кто уже поставил.
-        versionCode = 6
-        versionName = "0.1.5-beta"
+        versionCode = 7
+        versionName = "0.1.6-beta"
     }
 
     // Restricts which locale-qualified resources actually get packaged into
@@ -92,6 +92,14 @@ android {
             versionNameSuffix = "-$gitHash"
         }
         release {
+            // Ссылку на коммит внутрь APK не кладём. AGP пишет в
+            // META-INF/version-control-info.textproto хэш HEAD того дерева, из
+            // которого собирали. У нас деревьев два — приватное и публичное, —
+            // и хэши там разные по определению, поэтому воспроизводимая сборка
+            // F-Droid на этом файле разошлась в первый же прогон (15.09).
+            // Никакой пользы этот файл нам не даёт: версию и хэш отладочной
+            // сборки мы и так показываем в HUD.
+            vcsInfo { include = false }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
