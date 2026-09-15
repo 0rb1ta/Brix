@@ -48,8 +48,8 @@ android {
         //
         // versionCode обязан строго расти от релиза к релизу, иначе обновление
         // не доедет до тех, кто уже поставил.
-        versionCode = 7
-        versionName = "0.1.6-beta"
+        versionCode = 8
+        versionName = "0.1.7-beta"
     }
 
     // Restricts which locale-qualified resources actually get packaged into
@@ -65,6 +65,16 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    // Блок «Dependency metadata» в APK не нужен и вреден. AGP кладёт в него
+    // зашифрованный список зависимостей для Google Play; проверить его
+    // содержимое нельзя, поэтому сканер F-Droid считает такой блок проблемой и
+    // отказывается принимать сборку (15.09, задача check apk). Play мы не
+    // используем вовсе.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
     }
 
     compileOptions {
