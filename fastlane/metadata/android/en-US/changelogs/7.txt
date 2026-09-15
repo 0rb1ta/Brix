@@ -1,0 +1,3 @@
+No changes in the app since 0.1.5-beta. The build no longer writes the source commit
+hash into the package: it prevented F-Droid from reproducing our APK byte for byte,
+and therefore from publishing it under our own signature.
