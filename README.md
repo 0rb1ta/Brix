@@ -35,9 +35,11 @@ overlays, reconnect after losing a link.
 
 **Untested:**
 
-- **WHIP** — the code is there, but nobody has run it against a live receiver.
-- **MP4 recording** — it works, but there have been no long sessions, and
-  behaviour on a full disk is unverified.
+- **WHIP** — checked against a MediaMTX receiver on a local network, but it
+  sometimes fails to connect (the media connection does not come up); press
+  Start again. Not tried with commercial WHIP ingests.
+- **MP4 recording** — checked on short sessions; there have been no long ones,
+  and behaviour on a full disk is unverified.
 - **Moblink** (another phone as an extra uplink) — written, but never run with a
   real second device: the author does not have one.
 - **Kick and YouTube** — they should behave like Twitch, but were not tried.
@@ -46,8 +48,10 @@ overlays, reconnect after losing a link.
 
 **Limitations worth knowing up front:**
 
-- **Donation overlays support DonationAlerts only.** StreamElements and other
-  services are not supported.
+- **Donation overlays: DonationAlerts is field-tested.** DonatePay, iHAQ,
+  Donatty and donate.stream widgets are recognised and their connection is shown
+  in the HUD, but a real donation through them has not been seen yet.
+  StreamElements is not supported.
 - **Constant bitrate (CBR) is unavailable on the S21** — none of its hardware
   encoders advertise it, so the actual bitrate can exceed the target. Other
   devices may differ.
@@ -91,8 +95,10 @@ with your phone model and Android version is worth more than a patch.
 
 - Twitch, Kick and VK Video Live chat in one feed, anonymously, without a
   WebView. Shown to the streamer only — it does not go into the stream.
-- DonationAlerts overlays: image and caption rendered natively into the frame,
-  with the donation sound optionally mixed into the broadcast.
+- Donation overlays (DonationAlerts; DonatePay, iHAQ, Donatty, donate.stream
+  recognised): image and caption rendered natively into the frame, with the
+  donation sound optionally mixed into the broadcast. A per-service HUD label
+  shows whether the widget is connected.
 - Any web page as a source of picture in the frame.
 
 **Also**

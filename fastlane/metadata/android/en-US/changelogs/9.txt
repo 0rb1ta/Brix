@@ -1,0 +1,5 @@
+First-run wizard; settings offer only what the phone supports; microphone level
+meter; DonatePay, iHAQ and other donation services; chat emotes; WHIP to http://
+servers. Fixed: bonding failed when the first link to connect was dead; Reconnect
+left SRTLA stuck; plain SRT died when leaving Wi-Fi; mute in the phone-audio scene;
+the mascot loaded the CPU.
