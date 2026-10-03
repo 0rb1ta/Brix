@@ -48,8 +48,8 @@ android {
         //
         // versionCode обязан строго расти от релиза к релизу, иначе обновление
         // не доедет до тех, кто уже поставил.
-        versionCode = 8
-        versionName = "0.1.7-beta"
+        versionCode = 9
+        versionName = "0.2.0-beta"
     }
 
     // Restricts which locale-qualified resources actually get packaged into
@@ -119,6 +119,20 @@ android {
             if (keystoreProperties.isNotEmpty()) {
                 signingConfig = signingConfigs.getByName("release")
             }
+        }
+        // Релиз, который можно прогнать на стенде (bench/). Тесты и стенд
+        // работали только с debug, а людям уходит сборка с R8 и вырезанием
+        // ресурсов — если R8 выкинет что-то нужное kotlinx-сериализации или
+        // рефлексии, это всплыло бы уже у пользователя (разбор 03.10). Здесь
+        // тот же R8 и те же правила, но debuggable (стенду нужен run-as) и
+        // отладочная подпись: ставится поверх отладочной сборки без сноса.
+        // Людям эта сборка не уходит никогда.
+        create("bench") {
+            initWith(getByName("release"))
+            isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
+            versionNameSuffix = "-bench-$gitHash"
+            matchingFallbacks += listOf("release")
         }
     }
 }

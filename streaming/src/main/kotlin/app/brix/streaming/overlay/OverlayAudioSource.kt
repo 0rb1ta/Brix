@@ -19,6 +19,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class OverlayAudioSource(
     private val mic: MicrophoneSource = MicrophoneSource(),
     private val chunkBytes: Int = 4_096,
+    /** Считает уровень того, что уходит в энкодер, для индикатора в HUD. */
+    private val meter: app.brix.streaming.MicLevelMeter? = null,
 ) : AudioSource(), GetMicrophoneData {
 
     private val running = AtomicBoolean(false)
@@ -61,6 +63,7 @@ class OverlayAudioSource(
         echoCanceler: Boolean,
         noiseSuppressor: Boolean,
     ): Boolean {
+        meter?.stereo = isStereo
         return mic.init(sampleRate, isStereo, echoCanceler, noiseSuppressor)
     }
 
@@ -75,6 +78,9 @@ class OverlayAudioSource(
         mic.stop()
         out = null
         mixing = false
+        // Иначе полоски в HUD застывают на последнем значении и выглядят как
+        // работающий микрофон на остановленном эфире.
+        meter?.reset()
     }
 
     /** Mute state belongs to the user, not to whichever audio source happens to
@@ -106,10 +112,12 @@ class OverlayAudioSource(
 
     override fun inputPCMData(frame: Frame) {
         val sink = out ?: return
+        // Меряем ДО микширования: индикатор показывает голос, а не донат.
+        meter?.submit(frame.buffer, frame.offset, frame.size)
         if (mixing) {
             val chunks = donationPlayers.mapNotNull { it.nextStreamChunk(chunkBytes)?.takeIf { c -> c.isNotEmpty() } }
             if (chunks.isNotEmpty()) {
-                sink.inputPCMData(mix(frame.buffer, sumChunks(chunks), donationVolume))
+                sink.inputPCMData(mix(frame, sumChunks(chunks), donationVolume))
                 return
             }
         }
@@ -137,7 +145,17 @@ class OverlayAudioSource(
         return out
     }
 
-    private fun mix(micBytes: ByteArray, donation: ByteArray, volume: Float): Frame {
+    /** Метка времени — от кадра микрофона, а не текущие часы: пока играл
+     *  донат, звук получал метки по времени обработки, а после алерта они
+     *  прыгали обратно на время захвата — рассинхрон, который 2.8.1 как раз
+     *  чинил в самой библиотеке. И берём ровно [Frame.size] байт от
+     *  [Frame.offset], а не весь буфер. */
+    private fun mix(frame: Frame, donation: ByteArray, volume: Float): Frame {
+        val micBytes = if (frame.offset == 0 && frame.size == frame.buffer.size) {
+            frame.buffer
+        } else {
+            frame.buffer.copyOfRange(frame.offset, frame.offset + frame.size)
+        }
         val out = ByteArray(micBytes.size)
         val samples = minOf(micBytes.size, donation.size) / 2
         var i = 0
@@ -160,7 +178,7 @@ class OverlayAudioSource(
             out[i * 2 + 1] = micBytes[i * 2 + 1]
             i++
         }
-        return Frame(out, 0, out.size, System.nanoTime() / 1000)
+        return Frame(out, 0, out.size, frame.timeStamp)
     }
 
     private fun readSample(data: ByteArray, index: Int): Short {

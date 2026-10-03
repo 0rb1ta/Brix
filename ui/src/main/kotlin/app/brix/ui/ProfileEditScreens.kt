@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,6 +39,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -48,6 +52,21 @@ import app.brix.core.ServerType
 import app.brix.core.StreamProfile
 import app.brix.core.defaultStreamPresets
 import app.brix.streaming.EncoderCapabilities
+import app.brix.streaming.VideoMode
+
+/** Длинный адрес и ключ не выигрывают от ширины альбомного экрана: строка
+ *  растягивается на 800 dp, и опечатку в середине URL глазом не поймать.
+ *  Ограничиваем сами поля, а не колонку — списки и отчёты ширина нужна вся
+ *  (владелец, 20.09). */
+// Порядок важен: widthIn сначала, fillMaxWidth потом. В обратном порядке
+// fillMaxWidth фиксирует ширину родителя, и widthIn сузить её уже не может.
+private val LongFieldWidth = Modifier.widthIn(max = 480.dp).fillMaxWidth()
+
+/** Числовые поля настроек открывают цифровую клавиатуру: буквам в ширине,
+ *  fps и битрейте делать нечего, а переключать раскладку на ходу — лишнее
+ *  движение (аудит 20.09). Ввод дополнительно отфильтрован по цифрам:
+ *  клавиатуру можно сменить руками, да и вставка из буфера мимо неё. */
+private val numberKeyboard = KeyboardOptions(keyboardType = KeyboardType.Number)
 
 @Composable
 fun StreamProfileEditScreen(
@@ -71,6 +90,10 @@ fun StreamProfileEditScreen(
     var abrInit by rememberSaveable { mutableStateOf((profile?.adaptiveBitrate?.initialBitrateKbps ?: 2500).toString()) }
     var abrAlgorithm by rememberSaveable { mutableStateOf(profile?.adaptiveBitrate?.algorithm ?: AbrAlgorithm.BELABOX) }
     var keyframe by rememberSaveable { mutableStateOf((profile?.video?.keyframeIntervalSec ?: 2).toString()) }
+
+    // Стёртое поле раньше просто оставляло прежнее значение, и человек уходил
+    // с экрана уверенный, что поменял разрешение (аудит 20.09).
+    val numbersOk = app.brix.core.videoFieldsValid(width, height, fps, bitrate)
 
     val base = profile ?: newStreamProfile(name)
     val draft = base.copy(
@@ -107,6 +130,7 @@ fun StreamProfileEditScreen(
                     onBack()
                 },
                 saveLabel = stringResource(R.string.btn_save),
+                saveEnabled = numbersOk,
             )
         },
     ) { innerPadding ->
@@ -126,15 +150,21 @@ fun StreamProfileEditScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(12.dp))
+                val caps = rememberDeviceCapabilities()
+                val codecs = Codec.entries.filter { it in caps.hardwareCodecs || it == codec }
                 BrixSegmentRow(
                     title = stringResource(R.string.field_codec),
-                    options = listOf(
-                        Codec.H264 to "H.264",
-                        Codec.HEVC to "H.265/HEVC",
-                    ),
+                    options = codecs.map { it to codecLabel(it) },
                     selected = codec,
                     divider = false,
                 ) { codec = it }
+                if (codec !in caps.hardwareCodecs) {
+                    Text(
+                        stringResource(R.string.caps_codec_missing),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
 
             BrixCard {
@@ -148,7 +178,10 @@ fun StreamProfileEditScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    (defaultStreamPresets + settings.customPresets).forEach { preset ->
+                    val caps = rememberDeviceCapabilities()
+                    (defaultStreamPresets + settings.customPresets).filter { preset ->
+                        caps.supports(codec, VideoMode(preset.width, preset.height, preset.fps))
+                    }.forEach { preset ->
                         val isCustom = settings.customPresets.any { it.name == preset.name }
                         val selected = width == preset.width.toString() &&
                             height == preset.height.toString() &&
@@ -234,18 +267,21 @@ fun StreamProfileEditScreen(
                 }
             }
 
+            SettingsSectionHeader(stringResource(R.string.group_video))
             BrixCard {
                 Row {
                     OutlinedTextField(
                         value = width,
-                        onValueChange = { width = it },
+                        onValueChange = { width = it.filter(Char::isDigit) },
+                        keyboardOptions = numberKeyboard,
                         label = { Text(stringResource(R.string.field_width)) },
                         modifier = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(12.dp))
                     OutlinedTextField(
                         value = height,
-                        onValueChange = { height = it },
+                        onValueChange = { height = it.filter(Char::isDigit) },
+                        keyboardOptions = numberKeyboard,
                         label = { Text(stringResource(R.string.field_height)) },
                         modifier = Modifier.weight(1f),
                     )
@@ -254,16 +290,31 @@ fun StreamProfileEditScreen(
                 Row {
                     OutlinedTextField(
                         value = fps,
-                        onValueChange = { fps = it },
+                        onValueChange = { fps = it.filter(Char::isDigit) },
+                        keyboardOptions = numberKeyboard,
                         label = { Text(stringResource(R.string.field_fps)) },
                         modifier = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(12.dp))
                     OutlinedTextField(
                         value = bitrate,
-                        onValueChange = { bitrate = it },
+                        onValueChange = { bitrate = it.filter(Char::isDigit) },
+                        keyboardOptions = numberKeyboard,
                         label = { Text(stringResource(R.string.field_video_bitrate)) },
                         modifier = Modifier.weight(1f),
+                    )
+                }
+                val modeOk = rememberDeviceCapabilities().supports(
+                    codec,
+                    VideoMode(width.toIntOrNull() ?: 0, height.toIntOrNull() ?: 0, fps.toIntOrNull() ?: 0),
+                )
+                if (!modeOk) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        stringResource(R.string.caps_mode_unsupported),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 4.dp),
                     )
                 }
                 // Правду про режим битрейта больше нигде не видно: RootEncoder
@@ -289,12 +340,18 @@ fun StreamProfileEditScreen(
                 OutlinedTextField(
                     value = keyframe,
                     onValueChange = { keyframe = it.filter(Char::isDigit) },
+                    keyboardOptions = numberKeyboard,
                     label = { Text(stringResource(R.string.field_keyframe)) },
                     supportingText = { Text(stringResource(R.string.field_keyframe_hint)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(12.dp))
+            }
+            // Геометрия картинки и алгоритм адаптивного битрейта — разные
+            // разговоры: в одной карте человек, менявший fps, каждый раз
+            // проезжал глазами весь ABR (аудит 20.09).
+            SettingsSectionHeader(stringResource(R.string.group_abr))
+            BrixCard {
                 BrixToggleRow(
                     title = stringResource(R.string.adaptive_bitrate),
                     checked = abrEnabled,
@@ -304,7 +361,8 @@ fun StreamProfileEditScreen(
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
                         value = abrTarget,
-                        onValueChange = { abrTarget = it },
+                        onValueChange = { abrTarget = it.filter(Char::isDigit) },
+                        keyboardOptions = numberKeyboard,
                         label = { Text(stringResource(R.string.field_abr_target)) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
@@ -313,14 +371,16 @@ fun StreamProfileEditScreen(
                     Row {
                         OutlinedTextField(
                             value = abrMin,
-                            onValueChange = { abrMin = it },
+                            onValueChange = { abrMin = it.filter(Char::isDigit) },
+                            keyboardOptions = numberKeyboard,
                             label = { Text(stringResource(R.string.field_abr_min)) },
                             modifier = Modifier.weight(1f),
                         )
                         Spacer(Modifier.width(12.dp))
                         OutlinedTextField(
                             value = abrInit,
-                            onValueChange = { abrInit = it },
+                            onValueChange = { abrInit = it.filter(Char::isDigit) },
+                            keyboardOptions = numberKeyboard,
                             label = { Text(stringResource(R.string.field_abr_init)) },
                             modifier = Modifier.weight(1f),
                         )
@@ -367,6 +427,11 @@ fun ServerProfileEditScreen(
     // как это уже делает список серверов.
     var confirmDelete by remember { mutableStateOf(false) }
 
+    // Пустой или бессхемный адрес сохранялся молча, и человек узнавал об этом
+    // при выходе в эфир. Кнопка «Сохранить» теперь гаснет, а под полем видно,
+    // чего не хватает (аудит 20.09).
+    val urlOk = remember(baseUrl) { app.brix.core.looksLikeServerUrl(baseUrl) }
+
     val base = server ?: ServerProfile(
         id = Ids.newId(),
         name = name,
@@ -399,6 +464,7 @@ fun ServerProfileEditScreen(
                     onBack()
                 },
                 saveLabel = stringResource(R.string.btn_save),
+                saveEnabled = urlOk,
             )
         },
     ) { innerPadding ->
@@ -428,20 +494,42 @@ fun ServerProfileEditScreen(
                     selected = type,
                     divider = true,
                 ) { type = it }
-                Spacer(Modifier.height(12.dp))
+            }
+            SettingsSectionHeader(stringResource(R.string.group_server_address))
+            BrixCard {
                 OutlinedTextField(
                     value = baseUrl,
                     onValueChange = { baseUrl = it },
                     label = { Text(stringResource(R.string.field_url)) },
+                    isError = baseUrl.isNotBlank() && !urlOk,
                     // Схема адреса выбирает режим, а не отдельный тип сервера:
                     // так же устроено в Moblin, откуда приходит часть людей.
-                    supportingText = if (type == ServerType.SRTLA) {
-                        { Text(stringResource(R.string.field_url_hint_srtla)) }
-                    } else {
-                        null
+                    supportingText = when {
+                        baseUrl.isNotBlank() && !urlOk -> {
+                            {
+                                Text(
+                                    stringResource(R.string.field_url_invalid),
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                        type == ServerType.SRTLA -> {
+                            { Text(stringResource(R.string.field_url_hint_srtla)) }
+                        }
+                        // http:// для WHIP разрешён (владелец, 04.10), но человек
+                        // должен знать, что токен идёт открыто.
+                        type == ServerType.WHIP && baseUrl.trim().startsWith("http://", ignoreCase = true) -> {
+                            {
+                                Text(
+                                    stringResource(R.string.field_url_cleartext),
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                )
+                            }
+                        }
+                        else -> null
                     },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = LongFieldWidth,
                 )
                 // И у RTMP, и у SRTLA секрет доступа к каналу лежит в адресе:
                 // у первого последним сегментом пути, у второго внутри
@@ -483,11 +571,13 @@ fun ServerProfileEditScreen(
                             }
                         },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = LongFieldWidth,
                     )
                 }
-                if (type == ServerType.SRTLA) {
-                    Spacer(Modifier.height(12.dp))
+            }
+            if (type == ServerType.SRTLA) {
+                SettingsSectionHeader(stringResource(R.string.group_server_transport))
+                BrixCard {
                     BrixToggleRow(
                         title = stringResource(R.string.field_prefer_ipv4),
                         subtitle = stringResource(R.string.field_prefer_ipv4_hint),
@@ -498,6 +588,7 @@ fun ServerProfileEditScreen(
                     OutlinedTextField(
                         value = latency,
                         onValueChange = { latency = it.filter(Char::isDigit) },
+                        keyboardOptions = numberKeyboard,
                         label = { Text(stringResource(R.string.field_srt_latency)) },
                         supportingText = {
                             // Moblin предупреждает ровно так же при значении ниже
@@ -527,8 +618,15 @@ fun ServerProfileEditScreen(
                 // первый по порядку, а галочки стоят у двоих.
             }
             if (profileId != null) {
+                // Красная, как подтверждение в диалоге: раньше кнопка удаления
+                // выглядела ровно как «Сохранить» на соседних экранах, и в
+                // спешке разницу давало только расположение.
                 Button(
                     onClick = { confirmDelete = true },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(stringResource(R.string.btn_delete))

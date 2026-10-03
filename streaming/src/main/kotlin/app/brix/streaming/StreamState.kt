@@ -40,6 +40,9 @@ data class StreamState(
      *  to its alert server (per its own WS console logging) — null when no
      *  donation overlay is configured/no signal has arrived yet. */
     val donationWidgetConnected: Boolean? = null,
+    /** Состояние каждого донат-сервиса: id из [app.brix.core.DonationService] →
+     *  подключён ли хоть один его виджет. Пусто, когда донат-виджетов нет. */
+    val donationServices: Map<String, Boolean> = emptyMap(),
     val phase: SessionPhase? = null,
     val error: StreamError? = null,
     val connectedAtElapsedMs: Long? = null,

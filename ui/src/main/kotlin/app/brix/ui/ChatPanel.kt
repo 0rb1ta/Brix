@@ -1,5 +1,20 @@
 package app.brix.ui
 
+import android.util.LruCache
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.unit.em
+import app.brix.streaming.chat.ChatPart
+import app.brix.streaming.chat.EmoteImages
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -210,6 +225,34 @@ private fun PlatformStatusBadge(platform: ChatPlatform, connected: Boolean) {
     }
 }
 
+/** Высота эмодзи в долях размера шрифта: крупнее букв, но строку не распирает. */
+private const val EMOTE_EM = 1.6f
+
+/** Готовые картинки на всю панель: строка чата пересобирается при прокрутке,
+ *  и без этого каждая перерисовка снова шла бы к Glide. */
+private val emoteCache = LruCache<String, ImageBitmap>(300)
+
+@Composable
+private fun EmoteImage(emote: ChatPart.Emote) {
+    val context = LocalContext.current
+    val heightPx = with(LocalDensity.current) { 28.dp.roundToPx() }
+    val image by produceState(emoteCache.get(emote.url), emote.url) {
+        if (value == null) {
+            value = EmoteImages.load(context, emote.url, heightPx, emote.aspect)
+                ?.asImageBitmap()
+                ?.also { emoteCache.put(emote.url, it) }
+        }
+    }
+    image?.let {
+        Image(
+            bitmap = it,
+            contentDescription = emote.name,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
 @Composable
 private fun ChatMessageRow(message: ChatMessage, fontScale: Float) {
     val authorColor = message.colorHex?.let { hex ->
@@ -227,13 +270,31 @@ private fun ChatMessageRow(message: ChatMessage, fontScale: Float) {
                 .padding(top = 2.dp, end = 4.dp)
                 .size(12.dp * fontScale),
         )
+        // Эмодзи — вставками в сам текст (InlineTextContent), а не отдельными
+        // Image в Row: так они переносятся вместе со словами. Ключ вставки —
+        // адрес картинки: одинаковые эмодзи в строке делят одно описание.
+        val emotes = message.parts.filterIsInstance<ChatPart.Emote>().distinctBy { it.url }
         Text(
             text = buildAnnotatedString {
                 withStyle(SpanStyle(color = authorColor, fontWeight = FontWeight.Bold)) {
                     append(message.author)
                 }
                 append(": ")
-                append(message.text)
+                for (part in message.parts) {
+                    when (part) {
+                        is ChatPart.Text -> append(part.value)
+                        is ChatPart.Emote -> appendInlineContent(part.url, part.name)
+                    }
+                }
+            },
+            inlineContent = emotes.associate { emote ->
+                emote.url to InlineTextContent(
+                    Placeholder(
+                        width = (EMOTE_EM * emote.aspect.coerceIn(0.5f, 4f)).em,
+                        height = EMOTE_EM.em,
+                        placeholderVerticalAlign = PlaceholderVerticalAlign.Center,
+                    ),
+                ) { EmoteImage(emote) }
             },
             // lineHeight у Material-стилей — фиксированный sp, не доля от
             // fontSize: масштабировать нужно оба, иначе перенесённая строка

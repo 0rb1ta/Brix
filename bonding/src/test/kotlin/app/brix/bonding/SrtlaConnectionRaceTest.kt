@@ -75,6 +75,9 @@ class SrtlaConnectionRaceTest {
             )
             @Suppress("UNCHECKED_CAST")
             assertEquals(1, getField(connection, "regErrCount"))
+            // Аудит 23.09: без этого лестница REG2 продолжала бить в сервер,
+            // хотя попытка вроде бы отложена.
+            assertEquals("REG_ERR must park the link until the delayed retry", "IDLE", getField(connection, "state").toString())
 
             connection.stop()
         } finally {
@@ -256,6 +259,41 @@ class SrtlaConnectionRaceTest {
         val method = target.javaClass.getDeclaredMethod(name)
         method.isAccessible = true
         method.invoke(target)
+    }
+
+    /**
+     * Аудит 23.09: reconnect() закрывал сокет, не отвязав его, и старый поток
+     * чтения крутился на закрытом сокете без паузы. При неудачном подъёме
+     * (DNS не ответил) спин длился до конца эфира, а started=false не давал
+     * карантину запланировать повтор — линк был мёртв насовсем.
+     */
+    @Test
+    fun `failed reconnect stops the old reader and stays eligible for quarantine retry`() {
+        val fake = FakeSrtlaRec()
+        fake.start()
+        var dnsUp = true
+        val connection = SrtlaConnection(
+            "cellular",
+            1f,
+            null,
+            resolve = { if (dnsUp) InetAddress.getByName("127.0.0.1") else throw java.net.UnknownHostException("no dns") },
+        )
+        try {
+            connection.delegate = RecordingDelegate()
+            connection.start("127.0.0.1", fake.port)
+            assertTrue(awaitTrue(3_000) { getField(connection, "running") == true })
+            val oldReader = getField(connection, "readThread") as Thread
+
+            dnsUp = false
+            connection.reconnect("test")
+
+            assertTrue("old reader must exit, not spin", awaitTrue(2_000) { !oldReader.isAlive })
+            assertEquals("started must survive a failed reconnect", true, getField(connection, "started"))
+            assertEquals("a retry must be scheduled", true, getField(connection, "quarantinePending"))
+        } finally {
+            connection.stop()
+            fake.stop()
+        }
     }
 
     private fun invokeScheduleReconnect(connection: SrtlaConnection, delayMs: Long) {

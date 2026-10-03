@@ -55,8 +55,9 @@ class SettingsStoreTest {
         val loaded = result.getOrNull()!!
         // Всё по умолчанию, КРОМЕ пароля Moblink: он генерируется при первой
         // установке (14.09). Раньше здесь сверялось с `AppSettings()` целиком, и
-        // тест честно упал, когда поведение поменяли.
-        assertEquals(AppSettings(moblink = loaded.moblink), loaded)
+        // тест честно упал, когда поведение поменяли. И кроме признака мастера:
+        // свежая установка его ещё не прошла (16.09).
+        assertEquals(AppSettings(moblink = loaded.moblink, onboardingDone = false), loaded)
         assertNotEquals("пароль не остался общеизвестным", "1234", loaded.moblink.password)
         assertEquals(8, loaded.moblink.password.length)
     }

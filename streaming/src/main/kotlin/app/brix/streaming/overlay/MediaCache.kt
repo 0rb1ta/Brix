@@ -45,6 +45,13 @@ class MediaCache(
                         val body = response.body ?: return@withContext null
                         val tmp = File(cacheDir, "${cached.name}.part")
                         tmp.outputStream().use { out -> body.byteStream().copyTo(out) }
+                        // Ответ 200 с пустым телом — обычный сетевой сбой CDN.
+                        // Раньше такой файл ложился в кэш как годный, и
+                        // следующий донат падал на декодировании (аудит 23.09).
+                        if (tmp.length() == 0L) {
+                            tmp.delete()
+                            return@withContext null
+                        }
                         if (tmp.renameTo(cached)) {
                             cached.apply { evictIfNeeded() }
                         } else {

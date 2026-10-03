@@ -65,6 +65,9 @@ class SrtlaConnection(
     private var host = ""
     private var port = 0
     private var running = false
+
+    @Volatile
+    private var lastSlowSendLogMs = 0L
     private var started = false
     /** Номера отправленных, но ещё не подтверждённых пакетов. Примитивное
      *  множество, а не HashSet<Long>: тот упаковывал каждый номер в объект при
@@ -201,7 +204,14 @@ class SrtlaConnection(
 
     private var tickRegistration: PeriodicTasks.Registration? = null
 
-    private fun startInternal(generation: Long): Boolean {
+    /**
+     * [fromReconnect]: неудача при переподключении не должна сбрасывать
+     * `started`. Иначе [quarantine] (он требует `started && running`) молча
+     * выходит, повтор не планируется, и линк мёртв до конца эфира — аудит
+     * 23.09. При первом старте поведение прежнее: `started = false` даёт
+     * клиенту право позвать [start] ещё раз.
+     */
+    private fun startInternal(generation: Long, fromReconnect: Boolean = false): Boolean {
         var s: DatagramSocket? = null
         try {
             s = DatagramSocket()
@@ -222,7 +232,9 @@ class SrtlaConnection(
                 s.close()
                 return false
             }
-            Log.d(TAG, "srtla: $type socket started localPort=${s.localPort} host=$host port=$port")
+            // Адрес сервера не пишем: тег Srtla в белом списке диагностики, а
+            // её человек отдаёт чужим людям (решение 14.09, аудит 23.09).
+            Log.d(TAG, "srtla: $type socket started localPort=${s.localPort}")
             startReadLoop(s)
             return true
         } catch (e: Exception) {
@@ -232,11 +244,13 @@ class SrtlaConnection(
                 s?.close()
             } catch (_: Exception) {
             }
-            Log.e(TAG, "srtla: $type socket setup failed: ${e.javaClass.simpleName}: ${e.message}", e)
+            // У UnknownHostException в тексте — имя хоста; тип ошибки говорит
+            // то же самое без адреса.
+            Log.e(TAG, "srtla: $type socket setup failed: ${describe(e)}")
             synchronized(lock) {
                 if (lifecycleGeneration == generation) {
                     state = State.IDLE
-                    started = false
+                    if (!fromReconnect) started = false
                 }
             }
             return false
@@ -427,9 +441,23 @@ class SrtlaConnection(
                         else -> "SRT-CTRL-$t"
                     }
                 }
-                Log.v(TAG, "srtla: $type SEND $kind size=${packet.size} localPort=${s.localPort} dst=$host:$port")
+                Log.v(TAG, "srtla: $type SEND $kind size=${packet.size} localPort=${s.localPort}")
             }
+            val t0 = System.nanoTime()
             s.send(DatagramPacket(packet, packet.size))
+            val tookMs = (System.nanoTime() - t0) / 1_000_000
+            // Замер, а не правка: аудит 23.09 подозревает, что send() на
+            // перегруженной соте блокируется, а поток медиа держит outputLock
+            // SrtSender на время отправки по ВСЕМ линкам — тогда Wi-Fi ждёт соту.
+            // Прежде чем перестраивать блокировки, надо увидеть это в поле.
+            // Строка редкая: только при отправке дольше 20 мс, не чаще раза в 5 с.
+            if (tookMs >= SLOW_SEND_MS) {
+                val now = nowMillis()
+                if (now - lastSlowSendLogMs >= 5_000) {
+                    lastSlowSendLogMs = now
+                    Log.w(TAG, "srtla: $type slow send ${tookMs}ms size=${packet.size}")
+                }
+            }
             synchronized(lock) { totalBytesSent += packet.size }
         } catch (e: Exception) {
             // Network-bound socket whose interface is gone raises e.g.
@@ -595,7 +623,7 @@ class SrtlaConnection(
             }
         }
         while (true) {
-            if (!isCurrent(socket)) return
+            if (!isCurrent(socket) || socket.isClosed) return
             val packet = DatagramPacket(buffer, buffer.size)
             try {
                 socket.receive(packet)
@@ -608,12 +636,19 @@ class SrtlaConnection(
                 lastTick = nowMillis()
                 onTick()
             } catch (e: Exception) {
-                if (!isCurrent(socket)) return
+                // Закрытый сокет бросает на каждом receive() мгновенно: без этой
+                // проверки цикл крутился без паузы и занимал ядро целиком, пока
+                // reconnect() ждал этот же поток в join(300) — а при неудачном
+                // переподключении до конца эфира (аудит 23.09).
+                if (!isCurrent(socket) || socket.isClosed) return
                 lastTick = nowMillis()
                 onTick()
             }
         }
     }
+
+    private fun describe(e: Exception): String =
+        if (e is java.net.UnknownHostException) "UnknownHostException" else "${e.javaClass.simpleName}: ${e.message}"
 
     private fun isCurrent(socket: DatagramSocket): Boolean = synchronized(lock) {
         running && this.socket === socket
@@ -716,11 +751,12 @@ class SrtlaConnection(
                             Log.w(TAG, "srtla: $type $step retry $handshakeRetries/$MAX_HANDSHAKE_RETRIES")
                             retryHandshake = step
                         }
-                        // No bounce on exhaustion: the client-level state
-                        // machine only ever probes ONE connection (see
-                        // SrtlaClient.onSocketConnected), so a fresh socket
-                        // here would never be re-probed. SrtlaStream's
-                        // connection watchdog owns that escalation.
+                        // No bounce on exhaustion: a fresh socket here would
+                        // only be re-probed if the client is still waiting for
+                        // a probe answer (SrtlaClient.onSocketConnected — с 04.10
+                        // пробу шлёт каждый подключившийся линк, но только до
+                        // первого ответа). SrtlaStream's connection watchdog
+                        // owns the escalation.
                     }
                 }
                 else -> Unit
@@ -828,15 +864,22 @@ class SrtlaConnection(
             // Wait for the old read thread to exit before creating a replacement:
             // otherwise two readers race on the same Connection object and the
             // stale one may inject packets from the dead socket into the new one.
-            val oldThread = synchronized(lock) { readThread }
-            try { synchronized(lock) { socket }?.close() } catch (_: Exception) {}
+            // Сокет отвязываем под локом ДО закрытия: isCurrent(old) сразу
+            // становится false, и старый поток чтения выходит, а не крутится
+            // на закрытом сокете.
+            val (oldThread, oldSocket) = synchronized(lock) {
+                val pair = readThread to socket
+                socket = null
+                pair
+            }
+            try { oldSocket?.close() } catch (_: Exception) {}
             // Never join self: reconnect() called from the read loop would
             // otherwise block the caller for up to 300ms on its own monitor.
             if (oldThread != null && oldThread !== Thread.currentThread()) {
                 oldThread.join(300)
             }
             val gen = synchronized(lock) { lifecycleGeneration }
-            if (startInternal(gen)) {
+            if (startInternal(gen, fromReconnect = true)) {
                 handleReady()
             } else {
                 // Раньше здесь звался onSendFailed, и на единственном линке
@@ -900,6 +943,17 @@ class SrtlaConnection(
                     60_000L,
                     5_000L * (1L shl minOf(4, regErrCount - 1)),
                 )
+                // Отложенная попытка должна действительно откладывать. Раньше
+                // состояние не трогали, и лестница REG2/REG1 в onTick продолжала
+                // слать каждые 2 с, а через 6 с меняла сокет, — тот самый
+                // порочный круг с троттлингом, которого задержка должна избегать
+                // (аудит 23.09). IDLE: onTick регистрацию не шлёт, score() = -1,
+                // линк не выбирается до попытки из scheduleReconnect.
+                synchronized(lock) {
+                    state = State.IDLE
+                    handshakeStep = null
+                    reg2Retries = 0
+                }
                 scheduleReconnect(delayMs, "registration refused ctrl=0x${type.toString(16)}")
             }
             Srt.PacketType.ACK.rawValue -> {
@@ -996,6 +1050,7 @@ class SrtlaConnection(
     }
 
     companion object {
+        private const val SLOW_SEND_MS = 20L
         private const val TAG = "Srtla"
 
         /** Human-readable packet name for logs: a mystery 'ctrl=0x5' hid the

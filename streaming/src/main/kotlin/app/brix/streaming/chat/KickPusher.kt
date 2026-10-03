@@ -3,6 +3,8 @@ package app.brix.streaming.chat
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Kick chat rides Pusher (a third-party WS pub/sub service), same as it did
@@ -31,7 +33,12 @@ sealed class KickPusherEvent {
         val author: String,
         val colorHex: String?,
         val text: String,
+        val parts: List<ChatPart> = listOf(ChatPart.Text(text)),
     ) : KickPusherEvent()
+
+    /** Сервер Pusher проверяет, живо ли соединение, и ждёт `pusher:pong`
+     *  в пределах activity_timeout (обычно 120 с) — иначе вправе закрыть. */
+    data object Ping : KickPusherEvent()
 
     data object Other : KickPusherEvent()
 }
@@ -79,6 +86,12 @@ private val emoteTag = Regex("""\[emote:\d+:([^]]+)]""")
 object KickPusherParser {
 
     fun parse(rawFrame: String): KickPusherEvent {
+        // Служебные события Pusher несут в data объект, а не строку, и
+        // строгий разбор конверта на них падает — имя события читаем отдельно.
+        val eventName = runCatching {
+            json.parseToJsonElement(rawFrame).jsonObject["event"]?.jsonPrimitive?.content
+        }.getOrNull()
+        if (eventName == "pusher:ping") return KickPusherEvent.Ping
         val envelope = runCatching { json.decodeFromString<PusherEnvelope>(rawFrame) }.getOrNull()
             ?: return KickPusherEvent.Other
         if (envelope.event != "App\\Events\\ChatMessageEvent") return KickPusherEvent.Other
@@ -90,6 +103,7 @@ object KickPusherParser {
             author = message.sender.username,
             colorHex = message.sender.identity.color.takeIf { it.isNotBlank() },
             text = emoteTag.replace(message.content) { it.groupValues[1] },
+            parts = EmoteParts.kick(message.content),
         )
     }
 }

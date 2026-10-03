@@ -4,11 +4,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -64,52 +60,36 @@ private val CardBorder = Color(0xFF3A3A3D)
 private val OverheatGlow = Color(0xFFFF6B5B)
 private val EaseInOutSine = CubicBezierEasing(0.45f, 0f, 0.55f, 1f)
 
+/** Около 2.5 с дрожи при переподключении (цикл 280 мс). */
+private const val ALARM_WOBBLE_CYCLES = 9
+
+/** Три пульса рамки при перегреве (цикл 1 с). */
+private const val ALARM_GLOW_CYCLES = 3
+
 /**
  * Live "kaomoji" status mascot — replaces a plain icon in the quick-button
- * grid. Deliberately NOT just a static-glyph swap on state change: it
- * breathes continuously, blinks on a random timer, pops with a spring when
- * the state changes, and gets state-specific motion (jitter while
- * reconnecting, a pulsing glow while overheating, a bounce on donation).
+ * grid. Не просто смена глифа: моргает по случайному таймеру, подпрыгивает
+ * при смене состояния, на донат, коротко дрожит при переподключении и
+ * пульсирует рамкой при перегреве. Постоянного движения нет — см. замер
+ * в теле функции.
  * Purely decorative — no click behavior of its own.
  */
 @Composable
 fun BrixMascot(state: MascotState, modifier: Modifier = Modifier) {
-    val infinite = rememberInfiniteTransition(label = "mascot")
-
-    val breathe by infinite.animateFloat(
-        initialValue = 1f,
-        targetValue = if (state == MascotState.OVERHEAT) 1.07f else 1.035f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(if (state == MascotState.OVERHEAT) 420 else 1400, easing = EaseInOutSine),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "breathe",
-    )
-
-    // wobble/glowPhase are only actually composed while their state is
-    // active — an unconditional infinite.animateFloat here used to keep
-    // ticking (and recomposing this Text) at display refresh rate for the
-    // entire session even in IDLE/LIVE, its result just multiplied by 0.
-    val rotation = if (state == MascotState.RECONNECTING) {
-        val wobble by infinite.animateFloat(
-            initialValue = -1f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(140, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse,
-            ),
-            label = "wobble",
-        )
-        wobble * 5f
-    } else {
-        0f
-    }
+    // Бесконечных анимаций здесь нет НАМЕРЕННО. Замер на S21 23.09, голый эфир
+    // SRTLA: пока маскот «дышал» (бесконечный transition), интерфейс рисовал
+    // 60 кадров/с весь эфир — главный поток 30% ядра, поток отрисовки 32%.
+    // Без маскота — 8 кадров за 5 с, главный поток 7.5%, поток отрисовки из
+    // топа пропал. То есть декоративное покачивание стоило больше половины
+    // ядра, больше всего транспорта на двух каналах. Правило для этого файла:
+    // анимация только как короткий отклик на событие, в покое кадр стоит.
 
     // Blinks on its own random rhythm, independent of state changes, so it
     // never looks like it blinks "because" something happened — that's what
     // actually reads as alive rather than reactive-only. В покое моргает тоже:
     // 14.09 я убрал это по жалобе «в афк меняется выражение», но жалоба была
-    // про другое (см. blinkFace у LIVE), и моргание вернули.
+    // про другое (см. blinkFace у LIVE), и моргание вернули. Два кадра раз в
+    // 3–5 секунд — это почти бесплатно, в отличие от дыхания.
     var blinking by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -135,25 +115,44 @@ fun BrixMascot(state: MascotState, modifier: Modifier = Modifier) {
         }
     }
 
-    val borderColor = if (state == MascotState.OVERHEAT) {
-        val glowPhase by infinite.animateFloat(
-            initialValue = 0.25f,
-            targetValue = 0.9f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(500, easing = EaseInOutSine),
-                repeatMode = RepeatMode.Reverse,
-            ),
-            label = "glow",
-        )
-        OverheatGlow.copy(alpha = glowPhase)
-    } else {
-        CardBorder
+    // Тревожные состояния привлекают внимание движением только первые пару
+    // секунд, дальше стоят. Раньше дрожь при переподключении и пульс рамки
+    // при перегреве крутились всё время, пока длилось состояние, — то есть
+    // при перегреве мы добавляли нагрузку ровно тогда, когда телефону и так
+    // хуже всего (владелец, 23.09).
+    val wobble = remember { Animatable(0f) }
+    LaunchedEffect(state) {
+        if (state == MascotState.RECONNECTING) {
+            repeat(ALARM_WOBBLE_CYCLES) {
+                wobble.animateTo(1f, tween(140, easing = LinearEasing))
+                wobble.animateTo(-1f, tween(140, easing = LinearEasing))
+            }
+            wobble.animateTo(0f, tween(140, easing = LinearEasing))
+        } else {
+            wobble.snapTo(0f)
+        }
     }
+
+    val glow = remember { Animatable(1f) }
+    LaunchedEffect(state) {
+        if (state == MascotState.OVERHEAT) {
+            repeat(ALARM_GLOW_CYCLES) {
+                glow.animateTo(0.25f, tween(500, easing = EaseInOutSine))
+                glow.animateTo(0.9f, tween(500, easing = EaseInOutSine))
+            }
+            // Дальше статичная яркая рамка: перегрев виден, но ничего не движется.
+            glow.animateTo(1f, tween(200))
+        } else {
+            glow.snapTo(1f)
+        }
+    }
+
+    val borderColor = if (state == MascotState.OVERHEAT) OverheatGlow.copy(alpha = glow.value) else CardBorder
 
     Box(
         modifier = modifier
-            .scale(breathe * bounce.value)
-            .rotate(rotation)
+            .scale(bounce.value)
+            .rotate(wobble.value * 5f)
             .clip(RoundedCornerShape(18.dp))
             .background(CardBg)
             .border(2.dp, borderColor, RoundedCornerShape(18.dp)),

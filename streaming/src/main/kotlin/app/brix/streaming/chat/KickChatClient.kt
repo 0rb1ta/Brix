@@ -29,6 +29,7 @@ class KickChatClient(
     private val channelResolver: KickChannelResolver = OkHttpKickChannelResolver(),
     private val maxMessages: Int = 250,
     private val wsUrl: String = KICK_PUSHER_WS_URL,
+    private val thirdPartyEmotes: ThirdPartyEmotes = ThirdPartyEmotes(scope),
 ) {
     private val tag = "BrixChat"
     private val nextId = AtomicLong(0)
@@ -42,6 +43,8 @@ class KickChatClient(
     private var channel = ""
     private var chatroomId: String? = null
     private var chatroomChannelId: String? = null
+    private var userId: String? = null
+    private var thirdPartyEnabled = false
     private var socket: ChatSocket? = null
     private var stopped = true
 
@@ -67,6 +70,8 @@ class KickChatClient(
         if (normalized != channel) {
             chatroomId = null
             chatroomChannelId = null
+            userId = null
+            thirdPartyEmotes.clear()
         }
         channel = normalized
         _messages.value = emptyList()
@@ -74,6 +79,17 @@ class KickChatClient(
         socket = null
         reconnector.reset()
         openSocket()
+    }
+
+    /** Эмодзи 7TV/BTTV — см. [TwitchChatClient.setThirdPartyEmotes]. */
+    fun setThirdPartyEmotes(enabled: Boolean) {
+        thirdPartyEnabled = enabled
+        val id = userId
+        if (!enabled) {
+            thirdPartyEmotes.clear()
+        } else if (id != null) {
+            thirdPartyEmotes.load(EmotePlatform.KICK, id)
+        }
     }
 
     fun stop() {
@@ -102,6 +118,8 @@ class KickChatClient(
             }
             chatroomId = info.chatroomId
             chatroomChannelId = info.chatroomChannelId
+            userId = info.userId
+            info.userId?.let { if (thirdPartyEnabled) thirdPartyEmotes.load(EmotePlatform.KICK, it) }
             if (!stopped && channel == ch) openSocketWithIds(info.chatroomId, info.chatroomChannelId)
         }
     }
@@ -122,6 +140,9 @@ class KickChatClient(
                 if (socket !== mySocket) return
                 when (val event = KickPusherParser.parse(line)) {
                     is KickPusherEvent.ChatMessage -> append(event)
+                    // Без ответа тихий чат переподключался бы каждые ~2 минуты
+                    // и терял сообщения на время переподключения (аудит 23.09).
+                    KickPusherEvent.Ping -> mySocket.send("""{"event":"pusher:pong","data":{}}""")
                     KickPusherEvent.Other -> Unit
                 }
             }
@@ -144,6 +165,11 @@ class KickChatClient(
     }
 
     private fun append(event: KickPusherEvent.ChatMessage) {
+        val parts = if (thirdPartyEnabled) {
+            EmoteParts.applyWordEmotes(event.parts, thirdPartyEmotes.emotes.value)
+        } else {
+            event.parts
+        }
         val message = ChatMessage(
             id = "kick-${nextId.incrementAndGet()}",
             platform = ChatPlatform.KICK,
@@ -151,6 +177,7 @@ class KickChatClient(
             colorHex = event.colorHex,
             text = event.text,
             timestampMs = System.currentTimeMillis(),
+            parts = parts,
         )
         _messages.update { (it + message).takeLast(maxMessages) }
     }

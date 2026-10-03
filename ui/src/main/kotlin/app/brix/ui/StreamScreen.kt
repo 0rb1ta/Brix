@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.BatteryStd
 import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Lan
@@ -79,6 +80,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -263,21 +267,28 @@ fun StreamScreen(
     // настройки доезжают до экрана, и в эту щель приглашение и пролезало.
     val settingsReady = !settingsViewModel.isPlaceholder(settings)
 
+    val twitchViewers by settingsViewModel.twitch.viewers.collectAsState()
+    val kickViewers by settingsViewModel.kickViewers.collectAsState()
+    val totalViewers = listOfNotNull(twitchViewers, kickViewers).takeIf { it.isNotEmpty() }?.sum()
+    androidx.compose.runtime.CompositionLocalProvider(LocalViewers provides totalViewers) {
     Box(modifier = modifier.fillMaxSize()) {
-        if (server == null) {
-            // Пока не прочитали — не утверждаем, что сервера нет. Пустой кадр
-            // длится доли секунды и честнее ложного приглашения.
-            if (settingsReady) {
-                NoServerPrompt(onOpenSettings = {
-                    settingsRoute = SettingsRoute.Menu
-                    showSettings = true
-                })
-            }
-        } else {
-            key(server.id) {
+        // Без сервера показываем обычный экран эфира, а не отдельную заглушку:
+        // после мастера первого запуска, где сервер можно пропустить, заглушка
+        // с кнопкой посреди чёрного экрана выглядела как второй, старый мастер
+        // (владелец, 16.09). Кнопка «Старт» в этом случае открывает список
+        // серверов. Пока настройки не прочитаны — ничего: не утверждаем, что
+        // сервера нет (см. выше про мелькание).
+        val shownServer = server ?: NO_SERVER.takeIf { settingsReady }
+        if (shownServer != null) {
+            key(shownServer.id) {
                 ImmersiveStream(
-                    serverType = server.type,
-                    server = server,
+                    serverType = shownServer.type,
+                    server = shownServer,
+                    onNoServer = {
+                        settingsCategory = SettingsCategory.STREAM
+                        settingsRoute = SettingsRoute.ServerProfiles
+                        showSettings = true
+                    },
                     profile = settings.selectedStreamProfile(),
                     moblink = settings.moblink,
                     cameraDefaults = settings.cameraDefaults,
@@ -353,29 +364,19 @@ fun StreamScreen(
         }
     }
 }
-
-@Composable
-private fun NoServerPrompt(onOpenSettings: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(
-            text = stringResource(R.string.stream_no_server),
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = onOpenSettings) {
-            Text(stringResource(R.string.btn_settings))
-        }
-    }
 }
+
+/** Заглушка вместо сервера, когда ни одного нет: экран эфира живёт, но старт
+ *  ведёт в список серверов. Пустой адрес — признак, по которому это узнаётся. */
+internal val LocalViewers = androidx.compose.runtime.compositionLocalOf<Int?> { null }
+
+private val NO_SERVER = ServerProfile(id = "no-server", name = "", type = ServerType.SRTLA)
 
 @Composable
 private fun ImmersiveStream(
     serverType: ServerType,
     server: ServerProfile,
+    onNoServer: () -> Unit,
     profile: StreamProfile?,
     moblink: app.brix.core.MoblinkSettings,
     cameraDefaults: app.brix.core.CameraDefaults,
@@ -461,6 +462,10 @@ private fun ImmersiveStream(
         } else {
             twitchChatClient.stop()
         }
+    }
+    LaunchedEffect(chat.thirdPartyEmotes) {
+        twitchChatClient.setThirdPartyEmotes(chat.thirdPartyEmotes)
+        kickChatClient.setThirdPartyEmotes(chat.thirdPartyEmotes)
     }
     LaunchedEffect(chat.kickEnabled, chat.kickChannel) {
         if (chat.kickEnabled && chat.kickChannel.isNotBlank()) {
@@ -807,6 +812,27 @@ private fun ImmersiveStream(
         }
     }
 
+    // Настройки камеры и звука, изменённые поверх идущего экрана эфира (экран
+    // настроек рисуется оверлеем над ним), доходили до стримера только при
+    // Start: стабилизация, зеркало, усиление микрофона выглядели применёнными,
+    // а энкодер снимал по-старому до Stop->Start (аудит 23.09). configureCamera
+    // и configureAudio рассчитаны на применение на лету. Первое значение
+    // пропускаем — его уже отдал блок выше.
+    val liveCamera by rememberUpdatedState(cameraDefaults)
+    val liveAudio by rememberUpdatedState(audio)
+    LaunchedEffect(streamer) {
+        androidx.compose.runtime.snapshotFlow { liveCamera }
+            .drop(1)
+            .distinctUntilChanged()
+            .collect { streamer.configureCamera(it) }
+    }
+    LaunchedEffect(streamer) {
+        androidx.compose.runtime.snapshotFlow { liveAudio }
+            .drop(1)
+            .distinctUntilChanged()
+            .collect { streamer.configureAudio(it) }
+    }
+
     // Release the cached streamer only when the Activity is really going
     // away. A plain onDispose also fires on server switch (key(server.id))
     // and Activity recreation — killing a live stream in both cases (audit
@@ -840,7 +866,9 @@ private fun ImmersiveStream(
                 }
             }
             ButtonAction.ADAPTIVE_BITRATE -> streamer.setAdaptiveBitrate(!state.adaptiveBitrateEnabled)
-            ButtonAction.RECONNECT -> streamer.reconnect()
+            // Не на главном потоке: переподключение останавливает транспорт, а
+            // тот может ждать DNS под замком клиента SRTLA (аудит 23.09).
+            ButtonAction.RECONNECT -> scope.launch(kotlinx.coroutines.Dispatchers.IO) { streamer.reconnect() }
             ButtonAction.SETTINGS -> onOpenSettings()
             ButtonAction.TORCH -> streamer.setTorch(!state.torchOn)
             ButtonAction.LOCK -> { uiLocked = !uiLocked }
@@ -905,6 +933,10 @@ private fun ImmersiveStream(
                 withContext(Dispatchers.IO) { current.stop() }
                 StreamService.stop(context)
             } else {
+                if (server.baseUrl.isBlank()) {
+                    onNoServer()
+                    return@launch
+                }
                 if (profile != null) current.configure(profile, server.latencyMs)
                 current.configureMoblink(moblink)
                 (current as? app.brix.streaming.SrtlaStreamer)?.setPreferIpv4(server.preferIpv4)
@@ -1150,7 +1182,7 @@ private fun ImmersiveStream(
                 onToggleExpand = { hudExpanded = !hudExpanded },
                 telemetry = telemetry,
             )
-            ReconnectOverlay(state = state, onReconnect = { streamer.reconnect() })
+            ReconnectOverlay(state = state, onReconnect = { scope.launch(kotlinx.coroutines.Dispatchers.IO) { streamer.reconnect() } })
 
             if (chatAnyEnabled && !placementChat) {
                 FractionalBox(posX = chat.posX, posY = chat.posY, widthFraction = chat.width, heightFraction = chat.height) {
@@ -1226,6 +1258,27 @@ private fun ImmersiveStream(
                 )
             }
 
+            if (hud.showAudioLevel) {
+                // Над угловым слотом слева внизу — отдельным полем вне сетки,
+                // куда владелец ставит мьют (20.09). Привязка к месту, а не к
+                // кнопке: что бы ни стояло в слоте, индикатор не переезжает.
+                // Место слота фиксированное (BottomStart, отступ 16 dp, ячейка
+                // 50 dp), поэтому считаем от него, а не читаем координаты.
+                AudioMeter(
+                    left = streamer.audioLevelLeft,
+                    right = streamer.audioLevelRight,
+                    clipping = streamer.audioClipping,
+                    muted = state.micMuted,
+                    barHeight = 34.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(
+                            start = CORNER_SLOT_PADDING + (CORNER_SLOT_SIZE - AUDIO_METER_WIDTH) / 2,
+                            bottom = CORNER_SLOT_PADDING + CORNER_SLOT_SIZE + 6.dp,
+                        ),
+                )
+            }
+
             val cornerAction = quickButtons.cornerSlotAction
             if (editing || cornerAction != null) {
                 CornerSlotView(
@@ -1236,7 +1289,7 @@ private fun ImmersiveStream(
                     onAction = handleAction,
                     onAssign = { a -> onConfigChange(quickButtons.copy(cornerSlotAction = a)) },
                     onRemove = { onConfigChange(quickButtons.copy(cornerSlotAction = null)) },
-                    modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
+                    modifier = Modifier.align(Alignment.BottomStart).padding(CORNER_SLOT_PADDING),
                     mascotState = mascotState,
                 )
             }
@@ -1281,7 +1334,14 @@ private fun OverlayHost(
     val overlayController = remember(context, streamer, overlay.id) {
         OverlayController(context, streamer, overlay.id)
     }
-    val overlayJsBridge = remember(overlayController) { OverlayJsBridge(overlayController) }
+    // Сервис берётся из адреса виджета: DonationAlerts, DonatePay, iHAQ и
+    // прочие отличаются только доменом (см. DonationService).
+    val overlayService = remember(overlay.url) { app.brix.core.DonationService.forUrl(overlay.url) }
+    val overlayJsBridge = remember(overlayController, overlayService) {
+        OverlayJsBridge(overlayController) { connected ->
+            streamer.setOverlayConnectionState(overlay.id, overlayService.id, connected)
+        }
+    }
     // Loading the widget page (real network + JS execution) competes with the
     // camera for the main thread; doing both at once right at cold start was
     // observed to make Camera2 force-close and thrash-reopen the camera
@@ -1328,17 +1388,11 @@ private fun OverlayHost(
                     override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
                         val text = message.message()
                         android.util.Log.d("Overlay", "[${overlay.id.take(8)}] console: $text (${message.sourceId()}:${message.lineNumber()})")
-                        // Best-effort: the widget's own console logging is the
-                        // only signal we have for its connection state to the
-                        // alert server — matched on wording observed across
-                        // every diagnostics capture this session. If
-                        // DonationAlerts changes the wording, this just stops
-                        // updating rather than breaking anything.
-                        if (text.contains("WS: connected") || text.contains("[SocketIOClient] Connected") || text.contains("[SocketIOClient] Reconnected")) {
-                            streamer.setOverlayConnectionState(overlay.id, true)
-                        } else if (text.contains("WS: connection_error")) {
-                            streamer.setOverlayConnectionState(overlay.id, false)
-                        }
+                        // Состояние соединения больше не вычитывается из текста
+                        // консоли: его сообщает подменённый WebSocket/EventSource
+                        // (OverlayJsBridge.onSocketState). Прежний разбор строк был
+                        // подгонкой под формулировки DonationAlerts и у DonatePay,
+                        // iHAQ и прочих не работал вовсе.
                         return true
                     }
                 }
@@ -1362,12 +1416,18 @@ private fun OverlayHost(
         }
     }
     DisposableEffect(overlayPreview) {
+        // Мост переживает пересоздание WebView (тот же оверлей, новый адрес
+        // с тем же сервисом) — снова открываем его для новой страницы.
+        overlayJsBridge.detached = false
         onDispose {
+            // Сначала глушим мост: иначе закрытие сокетов при destroy() вернёт
+            // метку, которую forgetOverlayConnection ниже только что убрал.
+            overlayJsBridge.detached = true
             overlayPreview?.let { view ->
                 (view.parent as? android.view.ViewGroup)?.removeView(view)
                 view.destroy()
             }
-            streamer.setOverlayConnectionState(overlay.id, false)
+            streamer.forgetOverlayConnection(overlay.id)
         }
     }
     DisposableEffect(overlayController) {
@@ -1764,6 +1824,69 @@ private fun StatusOverlay(
     }
 }
 
+/** Угловой слот быстрых кнопок: отступ от угла и размер ячейки
+ *  (SMALL_W/SMALL_H в QuickButtons). Индикатор уровня стоит над ним. */
+private val CORNER_SLOT_PADDING = 16.dp
+private val CORNER_SLOT_SIZE = 50.dp
+
+private val AUDIO_METER_BAR = 4.dp
+private val AUDIO_METER_GAP = 3.dp
+private val AUDIO_METER_WIDTH = AUDIO_METER_BAR * 2 + AUDIO_METER_GAP
+
+/**
+ * Уровень микрофона двумя вертикальными полосками у левого края кадра —
+ * левый и правый каналы (в моно обе показывают одно и то же).
+ *
+ * Не в HUD (владелец, 17.09): HUD и так перегружен, а уровень нужен
+ * периферийным зрением, не читая цифр. С 20.09 стоит над угловым слотом
+ * слева внизу — на месте, а не вслед за кнопкой микрофона. Считается до
+ * подмешивания донатов, так что это именно голос.
+ *
+ * Мьют — полоски серые: отдельного значка нет, для этого уже есть быстрая
+ * кнопка микрофона (владелец, 20.09).
+ */
+@Composable
+private fun AudioMeter(
+    left: kotlinx.coroutines.flow.StateFlow<Float>,
+    right: kotlinx.coroutines.flow.StateFlow<Float>,
+    clipping: kotlinx.coroutines.flow.StateFlow<Boolean>,
+    muted: Boolean,
+    modifier: Modifier = Modifier,
+    barHeight: androidx.compose.ui.unit.Dp = 90.dp,
+) {
+    val l by left.collectAsState()
+    val r by right.collectAsState()
+    val clipped by clipping.collectAsState()
+    val idle = Color.White.copy(alpha = 0.25f)
+    val warn = MaterialTheme.colorScheme.error
+    Row(horizontalArrangement = Arrangement.spacedBy(AUDIO_METER_GAP), modifier = modifier) {
+        listOf(l, r).forEach { value ->
+            Box(
+                Modifier
+                    .width(AUDIO_METER_BAR)
+                    .height(barHeight)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(idle),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight(value.coerceIn(0f, 1f))
+                        .background(
+                            when {
+                                muted -> Color.White.copy(alpha = 0.55f)
+                                clipped -> warn
+                                value > 0.85f -> Color(0xFFFFB300)
+                                else -> Color(0xFF43A047)
+                            },
+                        ),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun HudCard(
     state: app.brix.streaming.StreamState,
@@ -1841,7 +1964,14 @@ private fun HudCard(
                         modifier = Modifier.widthIn(max = 120.dp),
                     )
                 }
-                state.donationWidgetConnected?.let { connected ->
+                // По метке на каждый донат-сервис, а не одна общая точка с
+                // логотипом DonationAlerts: виджетов может быть несколько и из
+                // разных сервисов, и важно видеть, какой именно отвалился.
+                // Буквенные метки, а не чужие логотипы — чтобы не тащить в
+                // открытое приложение фирменные знаки.
+                state.donationServices.forEach { (serviceId, connected) ->
+                    val service = app.brix.core.DonationService.entries
+                        .firstOrNull { it.id == serviceId } ?: app.brix.core.DonationService.UNKNOWN
                     Spacer(Modifier.width(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
@@ -1850,11 +1980,12 @@ private fun HudCard(
                                 CircleShape,
                             ),
                         )
-                        Spacer(Modifier.width(4.dp))
-                        Image(
-                            painter = painterResource(R.drawable.ic_donationalerts_logo),
-                            contentDescription = null,
-                            modifier = Modifier.size(13.dp),
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            service.label,
+                            style = hudLabel,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(service.colorArgb),
                         )
                     }
                 }
@@ -1891,6 +2022,15 @@ private fun HudCard(
                         Icon(batteryIcon(telemetry), null, Modifier.size(HUD_ICON), tint = bColor)
                         Spacer(Modifier.width(2.dp))
                         Text("${telemetry.batteryPct}%", style = hudNumber, color = bColor, fontWeight = if (batteryWarn) FontWeight.Bold else FontWeight.Normal)
+                    }
+                }
+                val viewers = LocalViewers.current
+                if (viewers != null && hud.showViewers) {
+                    Spacer(Modifier.width(HUD_GAP))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Visibility, null, Modifier.size(HUD_ICON), tint = onSurfaceVariant)
+                        Spacer(Modifier.width(2.dp))
+                        Text(viewers.toString(), style = hudNumber, color = onSurfaceVariant)
                     }
                 }
                 if (hud.showVersion) {

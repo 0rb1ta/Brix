@@ -14,7 +14,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -169,7 +168,7 @@ private fun ChannelPriorityRow(
             enabled = channel.enabled,
         )
         Spacer(Modifier.width(12.dp))
-        Switch(
+        BrixToggle(
             checked = channel.enabled,
             onCheckedChange = { enabled -> onChange(enabled, channel.weight, true) },
         )

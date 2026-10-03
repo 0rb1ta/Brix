@@ -277,6 +277,9 @@ data class ChatSettings(
     val height: Float = 0.42f,
     /** Множитель размера шрифта сообщений. */
     val fontScale: Float = 1f,
+    /** Эмодзи 7TV и BTTV в чатах Twitch и Kick. Выключено по умолчанию:
+     *  это запросы к сторонним сервисам с именем канала. */
+    val thirdPartyEmotes: Boolean = false,
 )
 
 /**
@@ -373,7 +376,76 @@ data class HudConfig(
      *  набором слоёв. Строка идёт только на экран стримера, в поток не
      *  попадает. */
     val showScene: Boolean = true,
+    val showViewers: Boolean = true,
+    val showAudioLevel: Boolean = true,
 )
+
+@Serializable
+data class TwitchIntegration(
+    val accessToken: String = "",
+    val refreshToken: String = "",
+    val expiresAtMs: Long = 0,
+    val userId: String = "",
+    val login: String = "",
+    val grantedScopes: List<String> = emptyList(),
+    val wantFollows: Boolean = false,
+    val wantSubs: Boolean = false,
+    val wantStreamKey: Boolean = false,
+) {
+    val loggedIn: Boolean get() = refreshToken.isNotBlank() && userId.isNotBlank()
+
+    fun wantedScopes(): List<String> = buildList {
+        if (wantFollows) add(SCOPE_FOLLOWERS)
+        if (wantSubs) add(SCOPE_SUBSCRIPTIONS)
+        if (wantStreamKey) add(SCOPE_STREAM_KEY)
+    }
+
+    fun needsRelogin(): Boolean = loggedIn && !grantedScopes.containsAll(wantedScopes())
+
+    fun loggedOut(): TwitchIntegration =
+        TwitchIntegration(wantFollows = wantFollows, wantSubs = wantSubs, wantStreamKey = wantStreamKey)
+
+    companion object {
+        const val SCOPE_FOLLOWERS = "moderator:read:followers"
+        const val SCOPE_SUBSCRIPTIONS = "channel:read:subscriptions"
+        const val SCOPE_STREAM_KEY = "channel:read:stream_key"
+    }
+}
+
+@Serializable
+data class KickIntegration(
+    val clientId: String = "",
+    val clientSecret: String = "",
+    val accessToken: String = "",
+    val refreshToken: String = "",
+    val expiresAtMs: Long = 0,
+    val userId: String = "",
+    val login: String = "",
+    val grantedScopes: List<String> = emptyList(),
+    val wantStreamKey: Boolean = false,
+) {
+    val configured: Boolean get() = clientId.isNotBlank() && clientSecret.isNotBlank()
+    val loggedIn: Boolean get() = refreshToken.isNotBlank()
+
+    fun wantedScopes(): List<String> = buildList {
+        add(SCOPE_USER)
+        add(SCOPE_CHANNEL)
+        if (wantStreamKey) add(SCOPE_STREAM_KEY)
+    }
+
+    fun needsRelogin(): Boolean = loggedIn && !grantedScopes.containsAll(wantedScopes())
+
+    fun loggedOut(): KickIntegration =
+        KickIntegration(clientId = clientId, clientSecret = clientSecret, wantStreamKey = wantStreamKey)
+
+    companion object {
+        const val SCOPE_USER = "user:read"
+        const val SCOPE_CHANNEL = "channel:read"
+        const val SCOPE_STREAM_KEY = "streamkey:read"
+        const val REDIRECT_URI = "http://127.0.0.1:58123/callback"
+        const val REDIRECT_PORT = 58123
+    }
+}
 
 @Serializable
 data class CameraDefaults(
@@ -649,6 +721,19 @@ data class AppSettings(
     val chat: ChatSettings = ChatSettings(),
     val scenes: List<Scene> = emptyList(),
     val selectedSceneId: String? = null,
+    /**
+     * Пройден ли мастер первого запуска.
+     *
+     * `null` — файл записан до появления мастера (16.09): такой человек уже
+     * пользуется приложением, и `migrate()` ставит `true`, чтобы мастер не
+     * выскочил поверх настроенного эфира. Свежая установка получает явный
+     * `false` из [defaultAppSettings]. Обычный `false` по умолчанию не годится:
+     * kotlinx не пишет значения по умолчанию на диск, и старый файл от нового
+     * было бы не отличить.
+     */
+    val onboardingDone: Boolean? = null,
+    val twitch: TwitchIntegration = TwitchIntegration(),
+    val kick: KickIntegration = KickIntegration(),
     @Deprecated("Kept only for schema migration into overlays.")
     val overlayUrl: String? = null,
     @Deprecated("Kept only for schema migration into overlays.")
@@ -739,11 +824,19 @@ data class AppSettings(
         // десяти заведомо старое — делим и округляем вверх, чтобы 1…9 не схлопнулись
         // в ноль и канал не выключился молча. Значения 10 и меньше уже годны как ранг
         // и остаются как есть, поэтому миграция идемпотентна.
+        // Устаревший звук профиля после переноса обнуляем: источник миграции
+        // «съедается», и она становится однократной по-настоящему. Раньше
+        // условие «общие настройки равны умолчанию» срабатывало снова, стоило
+        // человеку сбросить звук к умолчанию, — и тянуло старое поле профиля.
+        // Заодно это поле (в нём и имя гарнитуры) перестаёт уезжать в экспорт
+        // ссылкой и в диагностику: kotlinx умолчания не пишет (аудит 23.09).
+        @Suppress("DEPRECATION")
         val migratedProfiles = streamProfiles.map { profile ->
             profile.copy(
                 srtConnectionPriorities = profile.srtConnectionPriorities.map { p ->
                     if (p.weight > 10) p.copy(weight = ((p.weight + 9) / 10).coerceIn(1, 10)) else p
                 },
+                audio = AudioSettings(),
             )
         }
         // Пароль «1234» был значением по умолчанию до 14.09, то есть общеизвестным
@@ -808,6 +901,7 @@ data class AppSettings(
             }
         }
         return copy(
+            onboardingDone = onboardingDone ?: true,
             moblink = migratedMoblink,
             serverProfiles = migratedServers,
             widgets = migratedWidgets,
@@ -893,5 +987,6 @@ fun defaultAppSettings(): AppSettings {
     return AppSettings(
         streamProfiles = listOf(profile),
         selectedStreamProfileId = profile.id,
+        onboardingDone = false,
     )
 }

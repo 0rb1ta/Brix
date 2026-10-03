@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -35,7 +36,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 
 private val BrixShape = RoundedCornerShape(16.dp)
+
+/** Минимальная высота строки настроек. 48 dp — рекомендация Android по области
+ *  нажатия; у нас строки были около 38 dp, и попасть в них на ходу тяжело
+ *  (аудит 17.09). Отступ уменьшен с 9 до 6 dp, чтобы строки с подписью не
+ *  выросли: там высоту задаёт содержимое, а не минимум. */
+private val ROW_MIN_HEIGHT = 48.dp
 private val BrixRowShape = RoundedCornerShape(8.dp)
+
+/* Моноширинный шрифт остался там, где он работает: значения справа в строке,
+ * подписи сегментов, рельса категорий, отчёты и коды. Названия настроек с
+ * 20.09 пишутся обычным шрифтом — моноширинный читается заметно медленнее, а
+ * текста в настройках много (владелец, 20.09). */
 
 @Composable
 fun BrixCard(
@@ -71,15 +83,15 @@ fun BrixNavRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = ROW_MIN_HEIGHT)
             .clickable(onClick = onClick)
-            .padding(vertical = 9.dp),
+            .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 title,
                 style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             if (subtitle != null) {
@@ -120,14 +132,17 @@ fun BrixToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 9.dp),
+            .heightIn(min = ROW_MIN_HEIGHT)
+            // Вся строка, а не только переключатель: попасть пальцем в него на
+            // ходу тяжело, а строка — цель во всю ширину экрана.
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 title,
                 style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             if (subtitle != null) {
@@ -143,30 +158,23 @@ fun BrixToggleRow(
     if (divider) RowDivider()
 }
 
+/**
+ * Переключатель настроек — системный `Switch`, уменьшенный до 80%.
+ *
+ * Раньше здесь был свой прямоугольник 36×20 с кружком: без движения при
+ * переключении и почти сливающийся с фоном в выключенном состоянии. Хуже того,
+ * он был не единственным — на экране приоритетов каналов стоял настоящий
+ * Material Switch, и в одном меню жили два разных переключателя (владелец,
+ * 20.09: берём системный). Масштаб 0.8 — потому что штатные 52×32 в альбомном
+ * экране слишком крупные; область нажатия остаётся у всей строки.
+ */
 @Composable
 fun BrixToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(width = 36.dp, height = 20.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(
-                if (checked) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.outlineVariant
-                },
-            )
-            .clickable { onCheckedChange(!checked) },
-        contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(16.dp)
-                .clip(RoundedCornerShape(50))
-                .background(Color.White)
-                .padding(2.dp),
-        )
-    }
+    androidx.compose.material3.Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        modifier = Modifier.scale(0.8f),
+    )
 }
 
 @Composable
@@ -182,7 +190,6 @@ fun <T> BrixSegmentRow(
         Text(
             title,
             style = MaterialTheme.typography.bodyMedium,
-            fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurface,
         )
         if (subtitle != null) {

@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.brix.core.withPriority
 import app.brix.core.ConnectionPriority
 import app.brix.core.AppSettings
 import app.brix.core.Ids
@@ -24,6 +25,12 @@ import app.brix.core.WidgetKind
 import app.brix.core.ChatSettings
 import app.brix.core.MoblinkSettings
 import app.brix.core.StreamPreset
+import app.brix.core.KickIntegration
+import app.brix.core.TwitchIntegration
+import app.brix.streaming.kick.KickSession
+import app.brix.streaming.chat.OkHttpKickChannelResolver
+import app.brix.streaming.twitch.TWITCH_RTMP_INGEST
+import app.brix.streaming.twitch.TwitchSession
 import app.brix.core.defaultAppSettings
 import app.brix.core.withStreamProfilesEnsured
 import kotlinx.coroutines.Dispatchers
@@ -65,11 +72,93 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _settingsLoaded = MutableStateFlow(false)
     val settingsLoaded: StateFlow<Boolean> = _settingsLoaded.asStateFlow()
 
+    private val _kickViewers = MutableStateFlow<Int?>(null)
+    val kickViewers: StateFlow<Int?> = _kickViewers.asStateFlow()
+
+    val twitch = TwitchSession(
+        scope = viewModelScope,
+        read = { _settings.value.twitch },
+        write = { value ->
+            _settings.value = _settings.value.copy(twitch = value)
+            persist()
+        },
+    )
+
     init {
+        viewModelScope.launch { app.brix.streaming.DeviceCapabilities.load(application) }
         viewModelScope.launch(Dispatchers.IO) {
             _settings.value = loadSettings()
             _settingsLoaded.value = true
+            // Зрители нужны только в эфире: вне его опрос раз в минуту будил
+            // сеть впустую, в том числе со свёрнутым приложением (аудит 23.09).
+            twitch.startBackground { _settings.value.hud.showViewers && isLive() }
         }
+        viewModelScope.launch {
+            val kick = OkHttpKickChannelResolver()
+            while (true) {
+                val s = _settings.value
+                val slug = s.chat.kickChannel.trim()
+                _kickViewers.value = if (s.hud.showViewers && s.chat.kickEnabled && slug.isNotEmpty() && isLive()) {
+                    kick.viewers(slug)
+                } else {
+                    null
+                }
+                delay(60_000)
+            }
+        }
+    }
+
+    private fun isLive(): Boolean = app.brix.streaming.StreamController.current()?.isStreaming == true
+
+    val kick = KickSession(
+        scope = viewModelScope,
+        read = { _settings.value.kick },
+        write = { value ->
+            _settings.value = _settings.value.copy(kick = value)
+            persist()
+        },
+    )
+
+    fun updateKick(value: KickIntegration, commit: Boolean = true) {
+        _settings.value = _settings.value.copy(kick = value)
+        if (commit) persist()
+    }
+
+    suspend fun addKickServer(): Boolean {
+        val target = kick.streamTarget() ?: return false
+        val s = _settings.value
+        val existing = s.serverProfiles.firstOrNull { it.type == ServerType.RTMP && it.name == "Kick" }
+        val profile = existing?.copy(baseUrl = target.url, streamId = target.key) ?: ServerProfile(
+            id = Ids.newId(),
+            name = "Kick",
+            type = ServerType.RTMP,
+            baseUrl = target.url,
+            streamId = target.key,
+            enabled = s.serverProfiles.none { it.enabled },
+        )
+        saveServerProfile(profile)
+        return true
+    }
+
+    fun updateTwitchWants(value: TwitchIntegration) {
+        _settings.value = _settings.value.copy(twitch = value)
+        persist()
+    }
+
+    suspend fun addTwitchServer(): Boolean {
+        val key = twitch.streamKey() ?: return false
+        val s = _settings.value
+        val existing = s.serverProfiles.firstOrNull { it.type == ServerType.RTMP && it.baseUrl == TWITCH_RTMP_INGEST }
+        val profile = existing?.copy(streamId = key) ?: ServerProfile(
+            id = Ids.newId(),
+            name = "Twitch",
+            type = ServerType.RTMP,
+            baseUrl = TWITCH_RTMP_INGEST,
+            streamId = key,
+            enabled = s.serverProfiles.none { it.enabled },
+        )
+        saveServerProfile(profile)
+        return true
     }
 
     private fun loadSettings(): AppSettings {
@@ -280,6 +369,67 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         persist()
     }
 
+    /**
+     * Итог мастера первого запуска — одной записью.
+     *
+     * Сервер и качество пишутся вместе с признаком «пройден», а не по шагам:
+     * иначе закрытое на середине приложение оставило бы половину настроек и
+     * снова открыло бы мастер поверх них. Сервер, если задан, сразу делается
+     * единственным активным — экран эфира берёт первый включённый.
+     */
+    fun completeOnboarding(server: ServerProfile?, preset: StreamPreset?) {
+        val s = _settings.value
+        val servers = if (server == null) {
+            s.serverProfiles
+        } else {
+            s.serverProfiles.map { it.copy(enabled = false) } + server.copy(enabled = true)
+        }
+        val profiles = if (preset == null) {
+            s.streamProfiles
+        } else {
+            s.streamProfiles.map { p ->
+                if (p.id != s.selectedStreamProfileId) {
+                    p
+                } else {
+                    p.copy(
+                        video = p.video.copy(
+                            width = preset.width,
+                            height = preset.height,
+                            fps = preset.fps,
+                            bitrateKbps = preset.videoBitrateKbps,
+                        ),
+                    )
+                }
+            }
+        }
+        _settings.value = s.copy(serverProfiles = servers, streamProfiles = profiles, onboardingDone = true)
+        persist()
+    }
+
+    /**
+     * Мастер первого запуска, ветка «перенести из другого Brix или Moblin».
+     *
+     * В отличие от [importSharedConfig] (он дописывает к существующему), здесь
+     * ставить поверх нечего: у свежей установки один профиль «Default», и
+     * человек пришёл именно со своими настройками. Поэтому выбираем
+     * привезённый профиль, а активным делаем первый включённый сервер — ровно
+     * один, как требует экран эфира (см. [setActiveServer]).
+     */
+    fun completeOnboardingWithImport(config: app.brix.core.SharedConfig) {
+        val s = _settings.value
+        val activeId = (config.serverProfiles.firstOrNull { it.enabled } ?: config.serverProfiles.firstOrNull())?.id
+        val profiles = config.streamProfiles.ifEmpty { s.streamProfiles }
+        _settings.value = s.copy(
+            streamProfiles = profiles,
+            selectedStreamProfileId = profiles.firstOrNull()?.id ?: s.selectedStreamProfileId,
+            serverProfiles = s.serverProfiles.map { it.copy(enabled = false) } +
+                config.serverProfiles.map { it.copy(enabled = it.id == activeId) },
+            quickButtons = config.quickButtons ?: s.quickButtons,
+            onboardingDone = true,
+        )
+        persist()
+    }
+
     fun deleteCustomPreset(name: String) {
         _settings.value = _settings.value.copy(
             customPresets = _settings.value.customPresets.filterNot { it.name == name },
@@ -301,16 +451,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         val current = _settings.value
         val updated = current.streamProfiles.map { profile ->
             if (profile.id != profileId) return@map profile
-            val list = profile.srtConnectionPriorities.toMutableList()
-            val idx = list.indexOfFirst { it.name.equals(name, ignoreCase = true) }
-            val entry = ConnectionPriority(name, enabled = enabled, weight = weight)
-            if (idx >= 0) list[idx] = entry else list.add(entry)
-            val defaultsPresent = list.any { it.name.equals("WIFI", true) } &&
-                list.any { it.name.equals("CELLULAR", true) }
-            profile.copy(
-                srtConnectionPriorities = if (defaultsPresent) list
-                else defaultConnectionPriorities() + list,
-            )
+            // Правило и его тест — в core (ProfileEditing.kt).
+            profile.copy(srtConnectionPriorities = profile.srtConnectionPriorities.withPriority(name, enabled, weight))
         }
         _settings.value = current.copy(streamProfiles = updated)
         if (commit) persist()

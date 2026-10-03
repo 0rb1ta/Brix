@@ -39,6 +39,7 @@ class TwitchChatClient(
     private val socketFactory: ChatSocketFactory = { url, listener -> TwitchWebSocket(url, listener) },
     private val maxMessages: Int = 250,
     private val wsUrl: String = TWITCH_CHAT_WS_URL,
+    private val thirdPartyEmotes: ThirdPartyEmotes = ThirdPartyEmotes(scope),
 ) {
     private val tag = "BrixChat"
     private val nextId = AtomicLong(0)
@@ -50,6 +51,8 @@ class TwitchChatClient(
     val connected: StateFlow<Boolean> = _connected
 
     private var channel = ""
+    private var roomId: String? = null
+    private var thirdPartyEnabled = false
     private var socket: ChatSocket? = null
     private var stopped = true
 
@@ -75,11 +78,25 @@ class TwitchChatClient(
         if (!stopped && normalized == channel) return
         stopped = false
         channel = normalized
+        roomId = null
+        thirdPartyEmotes.clear()
         _messages.value = emptyList()
         socket?.close()
         socket = null
         reconnector.reset()
         openSocket()
+    }
+
+    /** Эмодзи 7TV/BTTV — отдельный переключатель в настройках чата. Набор
+     *  грузится, как только известен id канала (ROOMSTATE после JOIN). */
+    fun setThirdPartyEmotes(enabled: Boolean) {
+        thirdPartyEnabled = enabled
+        val id = roomId
+        if (!enabled) {
+            thirdPartyEmotes.clear()
+        } else if (id != null) {
+            thirdPartyEmotes.load(EmotePlatform.TWITCH, id)
+        }
     }
 
     fun stop() {
@@ -119,7 +136,11 @@ class TwitchChatClient(
                         Log.i(tag, "chat: сервер прислал RECONNECT")
                         mySocket.close()
                     }
-                    is TwitchIrcEvent.Privmsg -> append(event)
+                    is TwitchIrcEvent.RoomState -> onRoomId(event.roomId)
+                    is TwitchIrcEvent.Privmsg -> {
+                        event.roomId?.let(::onRoomId)
+                        append(event)
+                    }
                     TwitchIrcEvent.Other -> Unit
                 }
             }
@@ -141,7 +162,19 @@ class TwitchChatClient(
         created.connect()
     }
 
+    private fun onRoomId(id: String) {
+        if (id == roomId) return
+        roomId = id
+        if (thirdPartyEnabled) thirdPartyEmotes.load(EmotePlatform.TWITCH, id)
+    }
+
     private fun append(event: TwitchIrcEvent.Privmsg) {
+        val native = EmoteParts.twitch(event.text, event.emotesTag)
+        val parts = if (thirdPartyEnabled) {
+            EmoteParts.applyWordEmotes(native, thirdPartyEmotes.emotes.value)
+        } else {
+            native
+        }
         val message = ChatMessage(
             id = "twitch-${nextId.incrementAndGet()}",
             platform = ChatPlatform.TWITCH,
@@ -149,6 +182,7 @@ class TwitchChatClient(
             colorHex = event.colorHex,
             text = event.text,
             timestampMs = System.currentTimeMillis(),
+            parts = parts,
         )
         // Держим хвост фиксированной длины: эфир идёт часами, сообщений
         // тысячи — без этого предела список растёт всю трансляцию (6.9.1).

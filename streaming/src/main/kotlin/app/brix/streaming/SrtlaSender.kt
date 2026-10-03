@@ -11,7 +11,8 @@ import com.pedro.srt.mpeg2ts.MpegTsPacketizer
 import com.pedro.srt.mpeg2ts.MpegType
 import com.pedro.srt.mpeg2ts.packets.AacPacket
 import com.pedro.srt.mpeg2ts.packets.BasePacket
-import com.pedro.srt.mpeg2ts.packets.H26XPacket
+import com.pedro.srt.mpeg2ts.packets.H264Packet
+import com.pedro.srt.mpeg2ts.packets.H265Packet
 import com.pedro.srt.mpeg2ts.psi.Psi
 import com.pedro.srt.mpeg2ts.psi.PsiManager
 import com.pedro.srt.mpeg2ts.service.Mpeg2TsService
@@ -19,7 +20,6 @@ import com.pedro.srt.srt.packets.data.PacketPosition
 import com.pedro.srt.utils.chunkPackets
 import com.pedro.srt.utils.toCodec
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.runInterruptible
 import java.nio.ByteBuffer
 
 class SrtlaSender(
@@ -38,7 +38,9 @@ class SrtlaSender(
     private val limitSize = 1400 - 20 - 8 - 16
     private val mpegTsPacketizer = MpegTsPacketizer(psiManager)
     private var audioPacket: BasePacket = AacPacket(limitSize, psiManager)
-    private val videoPacket = H26XPacket(limitSize, psiManager)
+    // 2.8.1 разделил общий H26XPacket на два класса — пакет выбирается по кодеку
+    // при каждом setVideoInfo, как в их собственном SrtSender.
+    private var videoPacket: BasePacket = H264Packet(limitSize, psiManager)
 
     private var videoCodec = VideoCodec.H264
 
@@ -47,14 +49,29 @@ class SrtlaSender(
     }
 
     override fun setVideoInfo(sps: ByteBuffer, pps: ByteBuffer?, vps: ByteBuffer?) {
-        videoPacket.setVideoCodec(videoCodec.toCodec())
-        videoPacket.sendVideoInfo(sps, pps, vps)
+        videoPacket = when (videoCodec) {
+            VideoCodec.H265 -> {
+                requireNotNull(vps) { "vps can't be null with h265" }
+                requireNotNull(pps) { "pps can't be null with h265" }
+                (videoPacket as? H265Packet ?: H265Packet(limitSize, psiManager)).apply {
+                    setLimitSize(limitSize)
+                    sendVideoInfo(sps, pps, vps)
+                }
+            }
+            else -> {
+                requireNotNull(pps) { "pps can't be null with h264" }
+                (videoPacket as? H264Packet ?: H264Packet(limitSize, psiManager)).apply {
+                    setLimitSize(limitSize)
+                    sendVideoInfo(sps, pps)
+                }
+            }
+        }
     }
 
     override fun setAudioInfo(sampleRate: Int, isStereo: Boolean) {
         audioPacket = AacPacket(limitSize, psiManager).apply {
             setLimitSize(limitSize)
-            sendAudioInfo(sampleRate, isStereo)
+            sendAudioInfo(sampleRate, isStereo, AudioCodec.AAC)
         }
     }
 
@@ -81,12 +98,15 @@ class SrtlaSender(
         sendPackets(psiPacketsConfig)
 
         while (scope.isActive && running) {
-            val mediaFrame = runInterruptible { queue.take() }
-            getMpegTsPackets(mediaFrame) { mpegTsPackets ->
-                val isKey = mpegTsPackets[0].isKey
-                val psiPackets = psiManager.checkSendInfo(isKey, mpegTsPacketizer, chunkSize)
-                sendPackets(psiPackets)
-                sendPackets(mpegTsPackets)
+            // consumeFrame, а не queue.take(): очередь в 2.8.1 закрыта, а буфер кадра
+            // после обработки возвращается в их пул — отсюда и экономия на мусоре.
+            consumeFrame { mediaFrame ->
+                getMpegTsPackets(mediaFrame) { mpegTsPackets ->
+                    val isKey = mpegTsPackets[0].isKey
+                    val psiPackets = psiManager.checkSendInfo(isKey, mpegTsPacketizer, chunkSize)
+                    sendPackets(psiPackets)
+                    sendPackets(mpegTsPackets)
+                }
             }
         }
     }
@@ -94,6 +114,15 @@ class SrtlaSender(
     private fun sendPackets(packets: List<MpegTsPacket>) {
         if (packets.isEmpty()) return
         val now = System.nanoTime() / 1000
+        // Пока нет соединения, enqueue всё равно выбросит пакет — а мы уже
+        // выделили и скопировали его. Конвейер при переподключении намеренно
+        // не останавливается, так что в тоннеле это минуты по ~2 МБ/с мусора
+        // (аудит 23.09). send() зовём всё равно: он же переотправляет
+        // CONCLUSION и следит за таймаутом рукопожатия.
+        if (!srtSender.isConnectedOrProvisional()) {
+            srtSender.send(now)
+            return
+        }
         var totalBytes = 0L
         packets.forEach { mpegTsPacket ->
             srtSender.enqueue(srtSender.newDataPacket(mpegTsPacket.buffer), now)

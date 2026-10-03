@@ -57,12 +57,22 @@ class SrtlaStreamer(
     private val _uptimeTick = MutableStateFlow(0L)
     override val uptimeTick: StateFlow<Long> = _uptimeTick.asStateFlow()
 
+    private val micMeter = MicLevelMeter()
+    override val audioLevelLeft: StateFlow<Float> = micMeter.left
+    override val audioLevelRight: StateFlow<Float> = micMeter.right
+    override val audioClipping: StateFlow<Boolean> = micMeter.clipping
+
     private val tag = "BrixStream"
 
     private val srtlaClient = SrtlaClient()
     private val stream = SrtlaStream(appContext, this, srtlaClient)
     private val networkManager = BondingNetworkManager(appContext)
     private val connections = ConcurrentHashMap<Network, SrtlaConnection>()
+
+    /** Какие сети заводить каналами, какие держать в запасе (обычный SRT —
+     *  один канал, остальные в запасе на случай его пропажи). Логика и её
+     *  тесты — в ChannelRoster. */
+    private val roster = ChannelRoster<Network>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // Moblink (Этап F): relay devices join as extra SRTLA bonding channels,
@@ -92,12 +102,75 @@ class SrtlaStreamer(
     @Volatile
     private var currentPort = 0
     private val session = StreamSession()
-    private val reconnectPolicy = ReconnectPolicy()
-    private var reconnectJob: Job? = null
     private var fallbackJob: Job? = null
     private var currentUrl = ""
-    @Volatile
-    private var isReconnectAttempt = false
+
+    /** Решения о переподключении — в отдельном классе, покрытом тестами без
+     *  телефона (SrtlaReconnectControllerTest). Здесь только мост к стримеру. */
+    private val reconnects = SrtlaReconnectController(
+        session = session,
+        host = object : SrtlaReconnectController.Host {
+            override fun moveTo(phase: SessionPhase, gen: Long) = updateSession(phase, gen)
+
+            override fun reconnectTransport() {
+                if (currentHost.isNotEmpty() && currentPort > 0) stream.reconnect(currentHost, currentPort)
+            }
+
+            override fun restartFromFailed(): Boolean {
+                session.start()
+                activeGen = session.generation
+                return updateSession(SessionPhase.Connecting)
+            }
+
+            override fun onAttempt(attempt: Int) {
+                _state.update { it.copy(reconnectAttempt = attempt) }
+            }
+
+            override fun onExhausted(gen: Long) {
+                Log.w(tag, "переподключение: попытки кончились")
+                updateSession(SessionPhase.Failed, gen)
+                _state.update {
+                    it.copy(error = StreamError(
+                        code = StreamErrorCode.NETWORK_UNAVAILABLE,
+                        message = "Reconnect attempts exhausted",
+                        retryable = true,
+                    ))
+                }
+                // Не в потоке колбэка транспорта: stopStream ждёт отправителя.
+                scope.launch {
+                    if (stream.isStreaming) {
+                        try { stream.stopStream() } catch (_: Exception) {}
+                    }
+                }
+            }
+
+            override fun onFatal(reason: String) {
+                if (updateSession(SessionPhase.Failed)) {
+                    val error = errorCodeFor(reason)
+                    _state.update { it.copy(error = error) }
+                    // Keep the encode pipeline alive for retryable failures (network /
+                    // timeout / registration): a transport-only reconnect() then just
+                    // re-establishes SRT/SRTLA and media keeps flowing, instead of a
+                    // 15s dead-sender timeout (C3). Only stop the pipeline for hard,
+                    // non-retryable errors (auth / rejected) where reconnect is moot.
+                    if (!error.retryable && stream.isStreaming) {
+                        try { stream.stopStream() } catch (_: Exception) {}
+                    }
+                }
+            }
+        },
+        scheduler = { delayMs, block ->
+            Log.w(tag, "scheduleReconnect delay=$delayMs phase=${session.phase}")
+            val job = scope.launch {
+                delay(delayMs)
+                block()
+            }
+            object : SrtlaReconnectController.Handle {
+                override val isActive: Boolean get() = job.isActive
+                override fun cancel() = job.cancel()
+            }
+        },
+    )
 
     // Generation that owns the currently-running transport. Captured when
     // stream.startStream() is called; every transport callback (onConnection*,
@@ -119,24 +192,31 @@ class SrtlaStreamer(
         networkManager.listener = object : BondingNetworkManager.Listener {
             override fun onNetworkAvailable(type: String, network: Network) {
                 Log.w(tag, "onNetworkAvailable type=$type network=$network isActive=${session.isActive()} conns=${srtlaClient.connectionCount()}")
-                if (!session.isActive()) return
                 val gen = session.generation
                 val weight = channelWeightFor(type)
-                // A disabled channel (weight <= 0) must not be bonded at all.
-                if (weight <= 0) {
-                    Log.w(tag, "onNetworkAvailable type=$type weight=$weight — channel disabled, skipping")
-                    return@onNetworkAvailable
-                }
-                // Обычный SRT: второй канал не заводим вовсе. Мало не слать по
-                // нему данные — сам открытый сокет к тому же серверу ломает
-                // сессию: SRT привязан к паре адрес-порт, и приёмник отвечает
-                // туда, откуда последним что-то получил. Полевой прогон 14.09:
-                // данные шли по Wi-Fi, подтверждения приходили на соту, эфир
-                // умирал. Объединять тут всё равно нечего — серверной стороны
-                // SRTLA нет.
-                if (!srtlaClient.useSrtla && srtlaClient.connectionCount() > 0) {
-                    Log.i(tag, "onNetworkAvailable type=$type — обычный SRT, канал уже есть, второй не нужен")
-                    return@onNetworkAvailable
+                // Обычный SRT: второй канал не заводим — сам открытый сокет к тому
+                // же серверу ломает сессию (SRT привязан к паре адрес-порт, полевой
+                // прогон 14.09). Такая сеть уходит в запас. Канал с весом 0
+                // выключен в профиле и не заводится вовсе.
+                when (
+                    roster.onAvailable(
+                        network = network,
+                        type = type,
+                        weight = weight,
+                        sessionActive = session.isActive(),
+                        plainSrt = !srtlaClient.useSrtla,
+                        channelCount = srtlaClient.connectionCount(),
+                    )
+                ) {
+                    ChannelRoster.Decision.SKIP -> {
+                        Log.w(tag, "onNetworkAvailable type=$type weight=$weight — не заводим")
+                        return@onNetworkAvailable
+                    }
+                    ChannelRoster.Decision.STANDBY -> {
+                        Log.i(tag, "onNetworkAvailable type=$type — обычный SRT, канал уже есть, сеть в запасе")
+                        return@onNetworkAvailable
+                    }
+                    ChannelRoster.Decision.ADD -> Unit
                 }
                 val connection = srtlaClient.addConnection(
                     type = type,
@@ -159,7 +239,8 @@ class SrtlaStreamer(
                     // Wi-Fi, а без интернета на Wi-Fi не поднялся бы вовсе.
                     resolve = { host ->
                         runCatching { pickAddress(network.getAllByName(host).toList(), preferIpv4) }
-                            .onFailure { Log.w(tag, "DNS через $type не ответил: ${it.message}") }
+                            // Без it.message: в нём имя хоста, а тег BrixStream уезжает в диагностику.
+                            .onFailure { Log.w(tag, "DNS через $type не ответил: ${it.javaClass.simpleName}") }
                             .getOrNull()
                     },
                 )
@@ -182,6 +263,15 @@ class SrtlaStreamer(
             override fun onNetworkLost(network: Network) {
                 Log.w(tag, "onNetworkLost network=$network removed=${connections[network]?.type}")
                 connections.remove(network)?.let { srtlaClient.removeConnection(it) }
+                // Обычный SRT остался без канала — переезжаем на запасную сеть.
+                val next = roster.onLost(
+                    network = network,
+                    plainSrt = !srtlaClient.useSrtla,
+                    channelsLeft = connections.size,
+                    sessionActive = session.isActive(),
+                ) ?: return
+                Log.i(tag, "обычный SRT: канал пропал, переезжаем на ${next.second}")
+                onNetworkAvailable(next.second, next.first)
             }
         }
         stream.onHostPort = { host, port ->
@@ -397,6 +487,18 @@ class SrtlaStreamer(
                 // не трогаем — энкодер подберёт его сам под разрешение.
                 profile = EncoderCapabilities.bestProfile(p.codec),
             )
+            // Только голый микрофон: другой источник выбран сценой (внутренний
+            // звук при захвате экрана), подменять его нельзя.
+            if (stream.audioSource is com.pedro.encoder.input.sources.audio.MicrophoneSource) {
+                // Чистый микрофон тоже заворачиваем: обёртка считает уровень для
+                // индикатора в HUD. Настройки после смены источника применяются
+                // заново — как и везде, где меняется источник звука.
+                runCatching {
+                    stream.changeAudioSource(app.brix.streaming.overlay.OverlayAudioSource(meter = micMeter))
+                    stream.applyAudioSettings(audioSettings)
+                    stream.setMicMuted(_state.value.micMuted)
+                }.onFailure { Log.w(tag, "источник звука с измерителем не встал: ${it.message}") }
+            }
             val audioOk = stream.prepareAudio(
                 sampleRate = a.sampleRate,
                 isStereo = a.stereo,
@@ -498,9 +600,7 @@ class SrtlaStreamer(
                 restartGuard.recordStart(now)
                 activeGen = gen
                 currentUrl = url
-                reconnectPolicy.reset()
-                _state.update { it.copy(reconnectAttempt = 0) }
-                isReconnectAttempt = false
+                reconnects.onStarted()
                 startStats()
                 recorder.start()
                 startMoblink()
@@ -558,11 +658,14 @@ class SrtlaStreamer(
         Log.w("BrixStream", "stop() gen=$gen by=${stopCaller()}")
         restartGuard.onStop()
         activeGen = 0
-        reconnectJob?.cancel()
-        reconnectJob = null
+        // Фазу гасим ДО разборки бондинга, как в release(). Иначе было окно:
+        // каналы уже очищены, а session.isActive() ещё true, и колбэк смены
+        // сети с потока ConnectivityManager успевал добавить канал, который
+        // stop() уже не почистит — он доставался следующей сессии (аудит 23.09).
+        updateSession(SessionPhase.Stopping, gen)
+        reconnects.onStopped()
         fallbackJob?.cancel()
         fallbackJob = null
-        isReconnectAttempt = false
         if (stream.isStreaming) {
             try {
                 stream.stopStream()
@@ -574,41 +677,20 @@ class SrtlaStreamer(
         stopMoblink()
         networkManager.stop()
         connections.clear()
+        roster.clear()
         srtlaClient.clearConnections()
         // RootEncoder keeps the camera session (and its torch) alive across
         // stopStream() — without this, a torchOnStart session (or a manual
         // toggle) leaves the flashlight physically lit after Stop, draining
         // battery/heat on a device that already fights thermal throttling.
         if (_state.value.torchOn) setTorch(false)
-        updateSession(SessionPhase.Stopping, gen)
         updateSession(SessionPhase.Released, gen)
         _state.update { it.stopped() }
     }
 
     /** Force a transport re-establishment (e.g. notification "Reconnect" action). */
     @Synchronized
-    override fun reconnect() {
-        reconnectJob?.cancel()
-        reconnectPolicy.reset()
-        _state.update { it.copy(reconnectAttempt = 0) }
-        isReconnectAttempt = true
-        when (session.phase) {
-            SessionPhase.Live -> if (!updateSession(SessionPhase.Reconnecting)) return
-            SessionPhase.Preparing,
-            SessionPhase.Connecting,
-            SessionPhase.Reconnecting,
-            -> Unit
-            SessionPhase.Failed -> {
-                session.start()
-                activeGen = session.generation
-                if (!updateSession(SessionPhase.Connecting)) return
-            }
-            else -> return
-        }
-        if (currentHost.isNotEmpty() && currentPort > 0) {
-            stream.reconnect(currentHost, currentPort)
-        }
-    }
+    override fun reconnect() = reconnects.manualReconnect()
 
     override fun switchCamera() = camera.switchCamera()
 
@@ -635,7 +717,9 @@ class SrtlaStreamer(
         projection: android.media.projection.MediaProjection?,
     ): Boolean {
         val source = when (mode) {
-            SceneAudio.MIC -> MicrophoneSource()
+            // Свой источник даже для чистого микрофона: он же считает уровень
+            // для индикатора в HUD (MicLevelMeter), а микширование выключено.
+            SceneAudio.MIC -> app.brix.streaming.overlay.OverlayAudioSource(meter = micMeter)
             SceneAudio.INTERNAL -> {
                 val p = projection ?: return false
                 com.pedro.encoder.input.sources.audio.InternalAudioSource(p, null)
@@ -648,8 +732,10 @@ class SrtlaStreamer(
         return runCatching {
             stream.changeAudioSource(source)
             // Мьют, усиление и выбор устройства сбрасываются вместе с
-            // источником — подтверждаем их заново, как и везде.
+            // источником — подтверждаем их заново, как и везде. Мьют раньше
+            // здесь не подтверждался вовсе: смена сцены открывала микрофон.
             configureAudio(audioSettings)
+            stream.setMicMuted(_state.value.micMuted)
             true
         }.getOrElse {
             Log.e(tag, "звук сцены не переключён: ${it.message}")
@@ -721,6 +807,7 @@ class SrtlaStreamer(
         stream = stream,
         micMuted = { _state.value.micMuted },
         micGain = { audioSettings.micGain },
+        micMeter = micMeter,
         scope = scope,
         isReleased = { isReleased },
         updateState = { transform -> _state.update(transform) },
@@ -754,8 +841,10 @@ class SrtlaStreamer(
             .onFailure { onResult(null) }
     }
 
-    override fun setOverlayConnectionState(overlayId: String, connected: Boolean) =
-        overlays.setConnectionState(overlayId, connected)
+    override fun setOverlayConnectionState(overlayId: String, serviceId: String, connected: Boolean) =
+        overlays.setConnectionState(overlayId, serviceId, connected)
+
+    override fun forgetOverlayConnection(overlayId: String) = overlays.forgetConnection(overlayId)
 
     override fun attachLiveOverlay(overlayId: String, posX: Float, posY: Float, size: OverlaySize) =
         overlays.attachLive(overlayId, posX, posY, size)
@@ -802,11 +891,9 @@ class SrtlaStreamer(
         appliedKeyframeSec = null
         session.reset()
         activeGen = 0
-        reconnectJob?.cancel()
-        reconnectJob = null
+        reconnects.onStopped()
         fallbackJob?.cancel()
         fallbackJob = null
-        isReconnectAttempt = false
         scope.cancel()
         overlays.release()
         activeVideoEffectFilter?.let { runCatching { stream.getGlInterface().removeFilter(it) } }
@@ -831,11 +918,6 @@ class SrtlaStreamer(
 
     override fun onConnectionSuccess() {
         if (!session.matches(activeGen)) return
-        reconnectPolicy.reset()
-        _state.update { it.copy(reconnectAttempt = 0) }
-        isReconnectAttempt = false
-        reconnectJob?.cancel()
-        reconnectJob = null
         // Correct a stale encoder bitrate now that we're actually live (see
         // appliedBitrateKbps comment) — a profile edited since the encoder
         // was prepared previously had no effect until an app restart.
@@ -845,33 +927,13 @@ class SrtlaStreamer(
                 appliedBitrateKbps = target
             }
         }
-        updateSession(SessionPhase.Live)
+        reconnects.onSuccess()
     }
 
     override fun onConnectionFailed(reason: String) {
         if (!session.matches(activeGen)) return
-        Log.w(tag, "onConnectionFailed reason=$reason isReconnectAttempt=$isReconnectAttempt phase=${session.phase}")
-        if (session.phase == SessionPhase.Failed) {
-            Log.w(tag, "onConnectionFailed ignored: session already Failed")
-            return
-        }
-        if (isReconnectAttempt) {
-            updateSession(SessionPhase.Reconnecting)
-            scheduleReconnect()
-            return
-        }
-        if (updateSession(SessionPhase.Failed)) {
-            val error = errorCodeFor(reason)
-            _state.update { it.copy(error = error) }
-            // Keep the encode pipeline alive for retryable failures (network /
-            // timeout / registration): a transport-only reconnect() then just
-            // re-establishes SRT/SRTLA and media keeps flowing, instead of a
-            // 15s dead-sender timeout (C3). Only stop the pipeline for hard,
-            // non-retryable errors (auth / rejected) where reconnect is moot.
-            if (!error.retryable && stream.isStreaming) {
-                try { stream.stopStream() } catch (_: Exception) {}
-            }
-        }
+        Log.w(tag, "onConnectionFailed reason=$reason isReconnectAttempt=${reconnects.isReconnectAttempt} phase=${session.phase}")
+        reconnects.onFailure(reason)
     }
 
     private fun errorCodeFor(reason: String): StreamError {
@@ -908,42 +970,7 @@ class SrtlaStreamer(
         // Moblin-style recovery: no in-session tricks. Full clean teardown +
         // fresh attempt (new group, new ports) after a short backoff. This is
         // the model the belabox receiver ecosystem is battle-tested against.
-        if (session.phase == SessionPhase.Live || session.phase == SessionPhase.Connecting) {
-            if (updateSession(SessionPhase.Reconnecting)) {
-                scheduleReconnect()
-            }
-        }
-    }
-
-    private fun scheduleReconnect() {
-        reconnectJob?.cancel()
-        reconnectJob = scope.launch {
-            val gen = session.generation
-            val delayMs = reconnectPolicy.nextDelayMs()
-            Log.w(tag, "scheduleReconnect delay=$delayMs attempt=${reconnectPolicy.attempts} phase=${session.phase}")
-            _state.update { it.copy(reconnectAttempt = reconnectPolicy.attempts) }
-            if (delayMs == null) {
-                updateSession(SessionPhase.Failed, gen)
-                _state.update {
-                    it.copy(error = StreamError(
-                        code = StreamErrorCode.NETWORK_UNAVAILABLE,
-                        message = "Reconnect attempts exhausted",
-                        retryable = true,
-                    ))
-                }
-                if (stream.isStreaming) {
-                    try { stream.stopStream() } catch (_: Exception) {}
-                }
-                return@launch
-            }
-            delay(delayMs)
-            if (updateSession(SessionPhase.Connecting, gen)) {
-                isReconnectAttempt = true
-                if (session.matches(gen) && currentHost.isNotEmpty() && currentPort > 0) {
-                    stream.reconnect(currentHost, currentPort)
-                }
-            }
-        }
+        reconnects.onDisconnect()
     }
 
     override fun onAuthError() {

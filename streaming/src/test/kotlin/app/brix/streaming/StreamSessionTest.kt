@@ -28,6 +28,22 @@ class StreamSessionTest {
         assertEquals(SessionPhase.Released, s.phase)
     }
 
+    /** Аудит 23.09: ручное переподключение SRTLA оставляло фазу Reconnecting,
+     *  и успех упирался в запрещённый прямой переход в Live. Правильный путь —
+     *  через Connecting; тест фиксирует обе половины контракта. */
+    @Test
+    fun `reconnect must go through Connecting to reach Live`() {
+        val s = StreamSession()
+        val gen = s.start()!!
+        assertTrue(s.transition(SessionPhase.Connecting, gen))
+        assertTrue(s.transition(SessionPhase.Live, gen))
+        assertTrue(s.transition(SessionPhase.Reconnecting, gen))
+
+        assertFalse("direct Reconnecting -> Live stays forbidden", s.transition(SessionPhase.Live, gen))
+        assertTrue(s.transition(SessionPhase.Connecting, gen))
+        assertTrue(s.transition(SessionPhase.Live, gen))
+    }
+
     @Test
     fun `start is only allowed from Idle or Failed`() {
         val s = StreamSession()

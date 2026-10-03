@@ -37,6 +37,8 @@ import org.json.JSONArray
  */
 class OverlayJsBridge(
     private val controller: OverlayController,
+    /** Соединение виджета со своим сервером: открыт ли хоть один сокет. */
+    private val onConnection: (Boolean) -> Unit = {},
 ) {
     @Volatile
     var enabled = true
@@ -93,6 +95,29 @@ class OverlayJsBridge(
 
     @Volatile
     var captionVisible = true
+
+    /**
+     * Состояние сокета виджета: сообщает внедрённый скрипт, подменивший
+     * `WebSocket` и `EventSource`.
+     *
+     * Раньше это состояние вычитывалось из текста консоли («WS: connected»),
+     * то есть было подгонкой под формулировки DonationAlerts: у DonatePay
+     * (Centrifugo) и любого другого сервиса индикатор просто не загорался,
+     * а смена формулировки ломала бы и DonationAlerts. Подмена самого API
+     * работает у всех и не зависит от слов.
+     */
+    /** Виджет убирается с экрана. Уничтожение WebView закрывает его сокеты,
+     *  их обработчики `close` зовут [onSocketState] уже ПОСЛЕ того, как метка
+     *  сервиса убрана из HUD, — и она возвращалась погашенной. */
+    @Volatile
+    var detached = false
+
+    @JavascriptInterface
+    fun onSocketState(open: Boolean) {
+        if (detached) return
+        android.util.Log.d("Overlay", "bridge: socket open=$open")
+        onConnection(open)
+    }
 
     /** Called from the widget's JS when a new alert image appears.
      *  [audioUrlsJson] is a JSON array of zero or more sound URLs (chat
@@ -272,6 +297,76 @@ class OverlayJsBridge(
                 sm.__brixWrapped = true;
                 return sm;
             }
+
+            // ---- Соединение виджета со своим сервером ----
+            // Подменяем WebSocket и EventSource, а не читаем консоль: так
+            // состояние видно у любого сервиса (DonationAlerts, DonatePay на
+            // Centrifugo, iHAQ и прочие), и оно не зависит от формулировок в
+            // логах. Считаем «подключено», пока открыт хоть один сокет.
+            try {
+                window.__brixSockets = 0;
+                var report = function(){
+                    try { AndroidOverlayBridge.onSocketState(window.__brixSockets > 0); } catch (e) {}
+                };
+                if (window.WebSocket && !window.WebSocket.__brixWrapped) {
+                    var RealWS = window.WebSocket;
+                    var WrappedWS = function(url, protocols){
+                        var ws = protocols === undefined ? new RealWS(url) : new RealWS(url, protocols);
+                        // Считаем по флагу НА СОКЕТЕ, а не просто по событиям:
+                        // 'error' до 'open' иначе списывал бы чужой открытый
+                        // сокет, и метка гасла при живом соединении.
+                        var up = function(){
+                            if (ws.__brixOpen) return;
+                            ws.__brixOpen = true;
+                            window.__brixSockets++;
+                            report();
+                        };
+                        var down = function(){
+                            if (!ws.__brixOpen) return;
+                            ws.__brixOpen = false;
+                            if (window.__brixSockets > 0) window.__brixSockets--;
+                            report();
+                        };
+                        ws.addEventListener('open', up);
+                        ws.addEventListener('close', down);
+                        ws.addEventListener('error', down);
+                        return ws;
+                    };
+                    WrappedWS.prototype = RealWS.prototype;
+                    WrappedWS.CONNECTING = RealWS.CONNECTING;
+                    WrappedWS.OPEN = RealWS.OPEN;
+                    WrappedWS.CLOSING = RealWS.CLOSING;
+                    WrappedWS.CLOSED = RealWS.CLOSED;
+                    WrappedWS.__brixWrapped = true;
+                    window.WebSocket = WrappedWS;
+                }
+                if (window.EventSource && !window.EventSource.__brixWrapped) {
+                    var RealES = window.EventSource;
+                    var WrappedES = function(url, config){
+                        var es = config === undefined ? new RealES(url) : new RealES(url, config);
+                        // EventSource сам переподключается: после разрыва он
+                        // снова шлёт 'open'. Без флага на объекте счётчик от
+                        // каждого переподключения рос, и метка навсегда
+                        // застревала в «подключено».
+                        es.addEventListener('open', function(){
+                            if (es.__brixOpen) return;
+                            es.__brixOpen = true;
+                            window.__brixSockets++;
+                            report();
+                        });
+                        es.addEventListener('error', function(){
+                            if (!es.__brixOpen) return;
+                            es.__brixOpen = false;
+                            if (window.__brixSockets > 0) window.__brixSockets--;
+                            report();
+                        });
+                        return es;
+                    };
+                    WrappedES.prototype = RealES.prototype;
+                    WrappedES.__brixWrapped = true;
+                    window.EventSource = WrappedES;
+                }
+            } catch (e) { console.log('[brix] socket hook install err', e); }
             if (window.soundManager) real = wrap(window.soundManager);
             try {
                 Object.defineProperty(window, 'soundManager', {

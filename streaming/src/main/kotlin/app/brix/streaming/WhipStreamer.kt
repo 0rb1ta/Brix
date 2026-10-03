@@ -59,6 +59,11 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
     private val _uptimeTick = MutableStateFlow(0L)
     override val uptimeTick: StateFlow<Long> = _uptimeTick.asStateFlow()
 
+    private val micMeter = MicLevelMeter()
+    override val audioLevelLeft: StateFlow<Float> = micMeter.left
+    override val audioLevelRight: StateFlow<Float> = micMeter.right
+    override val audioClipping: StateFlow<Boolean> = micMeter.clipping
+
     private val stream = WhipStream(appContext, this).apply {
         getGlInterface().autoHandleOrientation = true
     }
@@ -135,6 +140,7 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
         stream = stream,
         micMuted = { _state.value.micMuted },
         micGain = { audioSettings.micGain },
+        micMeter = micMeter,
         scope = opsScope,
         isReleased = { isReleased },
         updateState = { transform -> _state.update(transform) },
@@ -219,6 +225,7 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
                 // Профиль по возможностям железа — см. SrtlaStreamer.prepare().
                 profile = EncoderCapabilities.bestProfile(p.codec),
             )
+            ensureMeteredAudioSource()
             val audioOk = stream.prepareAudio(
                 sampleRate = a.sampleRate,
                 isStereo = a.stereo,
@@ -293,14 +300,38 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
 
     override fun configureAudio(audio: AudioSettings) {
         audioSettings = audio
-        (stream.audioSource as? MicrophoneSource)?.let { mic ->
+        micSourceOrNull()?.let { mic ->
             mic.microphoneVolume = audio.micGain
             mic.audioSource = MicDevices.audioSourceOf(audio.processing)
         }
+        (stream.audioSource as? com.pedro.encoder.input.sources.audio.MixAudioSource)?.microphoneVolume = audio.micGain
         preferredMic = audio.micSource
         preferredMicName = audio.micDeviceName
         _state.update { it.copy(micSource = audio.micSource) }
         applyMicSource()
+    }
+
+
+    /** Микрофон под текущим источником: с 17.09 чистый микрофон тоже завёрнут в
+     *  [OverlayAudioSource] — он считает уровень для индикатора в HUD. Все
+     *  настройки микрофона применяются к обёрнутому источнику. */
+    private fun micSourceOrNull(): MicrophoneSource? = when (val source = stream.audioSource) {
+        is MicrophoneSource -> source
+        is app.brix.streaming.overlay.OverlayAudioSource -> source.micSourceForPreference()
+        else -> null
+    }
+
+    /** Поставить наш источник, если стоит голый микрофон из библиотеки. */
+    private fun ensureMeteredAudioSource() {
+        // Только голый микрофон из библиотеки. Любой другой источник выбран
+        // сценой (например, внутренний звук при захвате экрана), и подменять
+        // его микрофоном при пересборке потока нельзя.
+        if (stream.audioSource !is MicrophoneSource) return
+        runCatching {
+            stream.changeAudioSource(app.brix.streaming.overlay.OverlayAudioSource(meter = micMeter))
+            configureAudio(audioSettings)
+            setMuted(_state.value.micMuted)
+        }.onFailure { Log.w(tag, "источник звука с измерителем не встал: ${it.message}") }
     }
 
     private val recorder = StreamRecorder(appContext, stream)
@@ -323,7 +354,7 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
     /** Предпочтение сбрасывается вместе с источником звука, поэтому вызывается и
      *  из configure(), и при переключении кнопкой. */
     private fun applyMicSource() {
-        val mic = stream.audioSource as? MicrophoneSource ?: return
+        val mic = micSourceOrNull() ?: return
         // HAL вправе отказать, и отказ надо видеть: иначе выбор «у камеры»
         // молча остаётся выбором системы.
         val applied = runCatching {
@@ -432,7 +463,9 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
         projection: android.media.projection.MediaProjection?,
     ): Boolean {
         val source = when (mode) {
-            SceneAudio.MIC -> MicrophoneSource()
+            // Свой источник даже для чистого микрофона: он же считает уровень
+            // для индикатора в HUD (MicLevelMeter), а микширование выключено.
+            SceneAudio.MIC -> app.brix.streaming.overlay.OverlayAudioSource(meter = micMeter)
             SceneAudio.INTERNAL -> {
                 val p = projection ?: return false
                 com.pedro.encoder.input.sources.audio.InternalAudioSource(p, null)
@@ -445,8 +478,10 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
         return runCatching {
             stream.changeAudioSource(source)
             // Мьют, усиление и выбор устройства сбрасываются вместе с
-            // источником — подтверждаем их заново, как и везде.
+            // источником — подтверждаем их заново, как и везде. Мьют раньше
+            // здесь не подтверждался вовсе: смена сцены открывала микрофон.
             configureAudio(audioSettings)
+            setMuted(_state.value.micMuted)
             true
         }.getOrElse {
             Log.e(tag, "звук сцены не переключён: ${it.message}")
@@ -456,7 +491,11 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
 
 
     override fun setAdaptiveBitrate(enabled: Boolean) {
-        _state.update { it.copy(adaptiveBitrateEnabled = enabled) }
+        // Регулятора на WHIP нет (см. updateAdaptiveBitrateLimits), поэтому
+        // и признак «включено» не ставим. Раньше кнопка загоралась и
+        // обещала защиту от затора, которой не было (аудит 23.09).
+        if (enabled) Log.w(tag, "ABR на WHIP не поддержан — кнопка не включается")
+        _state.update { it.copy(adaptiveBitrateEnabled = false) }
     }
 
     override fun updateAdaptiveBitrateLimits(targetKbps: Int, minKbps: Int, initialKbps: Int) {
@@ -466,8 +505,14 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
 
     override fun setMuted(muted: Boolean) {
         _state.update { it.copy(micMuted = muted) }
-        (stream.audioSource as? MicrophoneSource)?.let { source ->
+        micSourceOrNull()?.let { source ->
             if (muted) source.mute() else source.unMute()
+        }
+        // Сцена «микрофон + звук телефона»: глушим микрофонную часть, звук
+        // телефона идёт дальше. Раньше этот источник падал мимо, и кнопка
+        // показывала «выключен», а голос шёл в эфир (аудит 23.09).
+        (stream.audioSource as? com.pedro.encoder.input.sources.audio.MixAudioSource)?.let { mix ->
+            if (muted) mix.mute() else mix.unMute()
         }
     }
 
@@ -534,8 +579,10 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
             .onFailure { onResult(null) }
     }
 
-    override fun setOverlayConnectionState(overlayId: String, connected: Boolean) =
-        overlays.setConnectionState(overlayId, connected)
+    override fun setOverlayConnectionState(overlayId: String, serviceId: String, connected: Boolean) =
+        overlays.setConnectionState(overlayId, serviceId, connected)
+
+    override fun forgetOverlayConnection(overlayId: String) = overlays.forgetConnection(overlayId)
 
     override fun attachLiveOverlay(overlayId: String, posX: Float, posY: Float, size: OverlaySize) =
         overlays.attachLive(overlayId, posX, posY, size)
@@ -671,6 +718,9 @@ class WhipStreamer(context: Context) : ConnectChecker, LiveStreamer {
             }
             it.copy(status = status, phase = session.phase, connectedAtElapsedMs = connectedAt)
         }
+        // Та же строка, что у SRTLA: по ней разбираются полевые журналы и стенд
+        // (bench/). У RTMP и WHIP переходов в логе не было вовсе.
+        Log.i(tag, "updateSession $to (from gen=$gen)")
         return true
     }
 }

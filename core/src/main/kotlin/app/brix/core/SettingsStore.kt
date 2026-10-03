@@ -42,7 +42,10 @@ class SettingsStore(
         // а не оставляем значением по умолчанию: служба поднимается в локальной
         // сети, и одинаковый пароль у всех владельцев приложения — не пароль.
         return primary ?: Result.success(
-            AppSettings(moblink = MoblinkSettings(password = generateMoblinkPassword())),
+            AppSettings(
+                moblink = MoblinkSettings(password = generateMoblinkPassword()),
+                onboardingDone = false,
+            ),
         )
     }
 

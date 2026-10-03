@@ -120,7 +120,8 @@ class SrtlaClient {
         this.port = port
         epoch.incrementAndGet()
         state = State.WAIT_FOR_REMOTE_SOCKET_CONNECTED
-        Log.d(TAG, "srtla-client: start host=$host port=$port conns=${connections.size} epoch=${epoch.get()}")
+        // Без адреса: тег в белом списке диагностики (аудит 23.09).
+        Log.d(TAG, "srtla-client: start conns=${connections.size} epoch=${epoch.get()}")
         val startEpoch = epoch.get()
         connections.forEach {
             if (state == State.IDLE || epoch.get() != startEpoch) return
@@ -301,7 +302,14 @@ class SrtlaClient {
                 connection.markReadyWithoutSrtla()
                 return
             }
-            if (state != State.WAIT_FOR_REMOTE_SOCKET_CONNECTED) return
+            // Пробу шлёт КАЖДЫЙ линк, подключившийся до ответа сервера, а не
+            // только первый; побеждает тот, через кого первым пришёл REG_NGP
+            // (onRegNgp ниже), — как у Moblin. Раньше линки, подключившиеся
+            // после первого, отсекались, и мёртвый первый (сота, у которой
+            // оператор режет UDP) не давал подняться бондингу при живом Wi-Fi:
+            // стенд 04.10, сценарий wifi — после возврата Wi-Fi первой в списке
+            // оказалась сота.
+            if (state != State.WAIT_FOR_REMOTE_SOCKET_CONNECTED && state != State.WAIT_FOR_PROBE) return
             // Advance the state BEFORE sending probe so a fast REG_NGP cannot
             // race ahead and be dropped.
             state = State.WAIT_FOR_PROBE

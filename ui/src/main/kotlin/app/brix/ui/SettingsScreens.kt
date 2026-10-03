@@ -110,7 +110,7 @@ sealed interface SettingsRoute {
 }
 
 enum class SettingsCategory {
-    STREAM, CAMERA, AUDIO, APPEARANCE, ADVANCED, MOBLINK, CHAT, CONFIG, ABOUT
+    STREAM, CAMERA, AUDIO, APPEARANCE, ADVANCED, MOBLINK, CHAT, INTEGRATIONS, CONFIG, ABOUT
 }
 
 @Composable
@@ -128,6 +128,7 @@ fun CategoryRail(
         SettingsCategory.ADVANCED to R.string.settings_cat_advanced,
         SettingsCategory.MOBLINK to R.string.settings_cat_moblink,
         SettingsCategory.CHAT to R.string.settings_cat_chat,
+        SettingsCategory.INTEGRATIONS to R.string.settings_cat_integrations,
         SettingsCategory.CONFIG to R.string.settings_cat_config,
         SettingsCategory.ABOUT to R.string.settings_cat_about,
     )
@@ -223,6 +224,10 @@ fun CategoryHome(
     onRoute: (SettingsRoute) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Значение прямо в строке: до 17.09 его показывали лишь пять строк из
+    // восемнадцати, и чтобы узнать активный сервер или число виджетов, надо
+    // было зайти внутрь (аудит настроек).
+    val settings by viewModel.settings.collectAsState()
     when (category) {
         // Scaffold + SettingsTopBar — тот же каркас, что у остальных восьми
         // категорий: раньше «Стрим» и «О приложении» были единственными, у
@@ -238,11 +243,41 @@ fun CategoryHome(
             ) {
                 item {
                     BrixCard {
-                        BrixNavRow(stringResource(R.string.settings_server_profiles), divider = true, onClick = { onRoute(SettingsRoute.ServerProfiles) })
-                        BrixNavRow(stringResource(R.string.settings_stream_profiles), divider = true, onClick = { onRoute(SettingsRoute.StreamProfiles) })
-                        BrixNavRow(stringResource(R.string.settings_scenes), divider = true, onClick = { onRoute(SettingsRoute.Scenes) })
-                        BrixNavRow(stringResource(R.string.settings_channel_priorities), divider = true, onClick = { onRoute(SettingsRoute.ChannelPriorities) })
-                        BrixNavRow(stringResource(R.string.settings_widgets), divider = false, onClick = { onRoute(SettingsRoute.Widgets) })
+                        BrixNavRow(
+                            stringResource(R.string.settings_server_profiles),
+                            value = settings.enabledServers().firstOrNull()?.name
+                                ?: stringResource(R.string.value_none),
+                            divider = true,
+                            onClick = { onRoute(SettingsRoute.ServerProfiles) },
+                        )
+                        val profile = settings.selectedStreamProfile()
+                        BrixNavRow(
+                            stringResource(R.string.settings_stream_profiles),
+                            value = profile?.let { "${it.video.height}p${it.video.fps}" }
+                                ?: stringResource(R.string.value_none),
+                            divider = true,
+                            onClick = { onRoute(SettingsRoute.StreamProfiles) },
+                        )
+                        BrixNavRow(
+                            stringResource(R.string.settings_scenes),
+                            value = settings.selectedScene()?.name
+                                ?: settings.scenes.size.takeIf { it > 0 }?.toString()
+                                ?: stringResource(R.string.value_none),
+                            divider = true,
+                            onClick = { onRoute(SettingsRoute.Scenes) },
+                        )
+                        BrixNavRow(
+                            stringResource(R.string.settings_channel_priorities),
+                            value = profile?.srtConnectionPriorities?.count { it.enabled }?.toString(),
+                            divider = true,
+                            onClick = { onRoute(SettingsRoute.ChannelPriorities) },
+                        )
+                        BrixNavRow(
+                            stringResource(R.string.settings_widgets),
+                            value = settings.widgets.count { it.enabled }.toString(),
+                            divider = false,
+                            onClick = { onRoute(SettingsRoute.Widgets) },
+                        )
                     }
                 }
             }
@@ -253,6 +288,7 @@ fun CategoryHome(
         SettingsCategory.ADVANCED -> AdvancedSettingsScreen(viewModel = viewModel, modifier = modifier)
         SettingsCategory.MOBLINK -> MoblinkSettingsScreen(viewModel = viewModel, modifier = modifier)
         SettingsCategory.CHAT -> ChatSettingsScreen(viewModel = viewModel, modifier = modifier)
+        SettingsCategory.INTEGRATIONS -> IntegrationsScreen(viewModel = viewModel, modifier = modifier)
         SettingsCategory.CONFIG -> ConfigTransferScreen(viewModel = viewModel, modifier = modifier)
         SettingsCategory.ABOUT -> Scaffold(
             modifier = modifier.fillMaxSize(),
@@ -372,7 +408,7 @@ internal fun crumb(categoryRes: Int, screenRes: Int): String =
     "${stringResource(categoryRes)} · ${stringResource(screenRes)}"
 
 @Composable
-private fun SettingsSectionHeader(title: String) {
+internal fun SettingsSectionHeader(title: String) {
     Text(
         text = title,
         style = MaterialTheme.typography.labelMedium,
@@ -409,18 +445,23 @@ fun CameraSettingsScreen(
                         selected = camera.tapToFocus,
                         divider = true,
                     ) { viewModel.updateCameraDefaults(camera.copy(tapToFocus = it)) }
-                    BrixToggleRow(
-                        stringResource(R.string.camera_stabilization),
-                        subtitle = stringResource(R.string.camera_stabilization_hint),
-                        checked = camera.stabilization,
-                        divider = true,
-                    ) { viewModel.updateCameraDefaults(camera.copy(stabilization = it)) }
-                    BrixToggleRow(
-                        stringResource(R.string.camera_ois),
-                        subtitle = stringResource(R.string.camera_ois_hint),
-                        checked = camera.opticalStabilization,
-                        divider = true,
-                    ) { viewModel.updateCameraDefaults(camera.copy(opticalStabilization = it)) }
+                    val caps = rememberDeviceCapabilities()
+                    if (caps.electronicStabilization || camera.stabilization) {
+                        BrixToggleRow(
+                            stringResource(R.string.camera_stabilization),
+                            subtitle = stringResource(R.string.camera_stabilization_hint),
+                            checked = camera.stabilization,
+                            divider = true,
+                        ) { viewModel.updateCameraDefaults(camera.copy(stabilization = it)) }
+                    }
+                    if (caps.opticalStabilization || camera.opticalStabilization) {
+                        BrixToggleRow(
+                            stringResource(R.string.camera_ois),
+                            subtitle = stringResource(R.string.camera_ois_hint),
+                            checked = camera.opticalStabilization,
+                            divider = true,
+                        ) { viewModel.updateCameraDefaults(camera.copy(opticalStabilization = it)) }
+                    }
                     BrixToggleRow(
                         stringResource(R.string.camera_mirror_front),
                         subtitle = stringResource(R.string.camera_mirror_front_hint),
@@ -433,12 +474,14 @@ fun CameraSettingsScreen(
                         checked = camera.mirrorFrontInStream,
                         divider = true,
                     ) { viewModel.updateCameraDefaults(camera.copy(mirrorFrontInStream = it)) }
-                    BrixToggleRow(
-                        stringResource(R.string.camera_torch_start),
-                        subtitle = stringResource(R.string.camera_torch_start_hint),
-                        checked = camera.torchOnStart,
-                        divider = false,
-                    ) { viewModel.updateCameraDefaults(camera.copy(torchOnStart = it)) }
+                    if (rememberDeviceCapabilities().torch || camera.torchOnStart) {
+                        BrixToggleRow(
+                            stringResource(R.string.camera_torch_start),
+                            subtitle = stringResource(R.string.camera_torch_start_hint),
+                            checked = camera.torchOnStart,
+                            divider = false,
+                        ) { viewModel.updateCameraDefaults(camera.copy(torchOnStart = it)) }
+                    }
                 }
             }
             item {
@@ -503,6 +546,7 @@ fun AudioSettingsScreen(
                 BrixCard {
                     BrixToggleRow(
                         stringResource(R.string.field_stereo),
+                        subtitle = stringResource(R.string.field_stereo_hint),
                         checked = audio.stereo,
                         divider = false,
                     ) { viewModel.updateAudio(audio.copy(stereo = it)) }
@@ -681,13 +725,20 @@ fun AppearanceSettingsScreen(
                     // (Local overlays) тоже лежит в разделе Display. Плюс
                     // тумблер автоскрытия HUD и так стоит на этом же экране —
                     // теперь настройка и её содержимое рядом.
+                    val hud = settings.hud
+                    val hudShown = listOf(
+                        hud.showBattery, hud.showThermal, hud.showNetworks, hud.showBitrate,
+                        hud.showUptime, hud.showVersion, hud.showScene, hud.showViewers,
+                    ).count { it }
                     BrixNavRow(
                         stringResource(R.string.settings_hud),
+                        value = "$hudShown/8",
                         divider = true,
                         onClick = { onRoute(SettingsRoute.Hud) },
                     )
                     BrixNavRow(
                         stringResource(R.string.settings_quick_buttons),
+                        value = settings.quickButtons.slots.size.toString(),
                         divider = false,
                         onClick = { onRoute(SettingsRoute.QuickButtons) },
                     )
@@ -700,7 +751,29 @@ fun AppearanceSettingsScreen(
 /** Display name for a locale tag, in that locale's own language (e.g. "en"
  *  -> "English", "ru" -> "Русский") — so a language is recognizable even to
  *  someone who can't currently read the UI. */
-private fun displayNameForLanguageTag(tag: String): String {
+/**
+ * Языки, на которые приложение действительно переведено.
+ *
+ * `assets.locales` отдаёт не только наши папки values-xx, но и все языки
+ * системных ресурсов Android — в мастере первого запуска это вылезло списком
+ * из десятков языков при двух переводах (16.09). Поэтому каждый кандидат
+ * проверяем: в своей локали строка `locale_tag` должна назвать этот же язык.
+ * Если перевода нет, Android отдаст строку из базовой папки, и тег не совпадёт.
+ * Переводчику по-прежнему не нужен Kotlin — только `locale_tag` в своём файле.
+ */
+internal fun supportedAppLanguages(context: android.content.Context): List<String> =
+    context.assets.locales
+        .map { it.lowercase().substringBefore("-") }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .filter { tag ->
+            val config = android.content.res.Configuration(context.resources.configuration)
+            config.setLocale(java.util.Locale.forLanguageTag(tag))
+            context.createConfigurationContext(config).getString(R.string.locale_tag) == tag
+        }
+        .sorted()
+
+internal fun displayNameForLanguageTag(tag: String): String {
     val locale = Locale.forLanguageTag(tag)
     return locale.getDisplayLanguage(locale).replaceFirstChar { it.titlecase(locale) }
 }
@@ -719,17 +792,7 @@ fun LanguageScreen(
     // "xx" show up here automatically — a translator adding a new language
     // needs to touch zero Kotlin code, just drop in a translated strings.xml.
     val options = remember(context) {
-        listOf("" to null) +
-            context.assets.locales
-                // assets.locales() includes "" (the base/unqualified
-                // config) — collapsing to base language also merges region
-                // variants (en-US, en-GB -> en), since we only ship
-                // per-language, not per-region, translations.
-                .map { it.lowercase().substringBefore("-") }
-                .filter { it.isNotBlank() }
-                .distinct()
-                .sorted()
-                .map { it to it }
+        listOf("" to null) + supportedAppLanguages(context).map { it to it }
     }
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -769,11 +832,6 @@ fun AdvancedSettingsScreen(
     val settings by viewModel.settings.collectAsState()
     val advanced = settings.advanced
     val context = LocalContext.current
-    // Пересчитывается при каждом входе на экран, а не на каждой рекомпозиции:
-    // после выезда важно видеть, что запись вообще появилась.
-    val sessionLogs = remember(advanced.debugLog) {
-        app.brix.core.diagnostics.Diagnostics.listSessionLogs(context).size
-    }
     Scaffold(
         modifier = modifier.fillMaxSize(),
         // Без onBack: это и есть экран категории «Расширенные», деться
@@ -796,40 +854,6 @@ fun AdvancedSettingsScreen(
                         checked = advanced.recordStream,
                         divider = false,
                     ) { viewModel.updateAdvanced(advanced.copy(recordStream = it)) }
-                }
-            }
-            item {
-                BrixCard {
-                    BrixToggleRow(
-                        stringResource(R.string.advanced_debug_log),
-                        subtitle = stringResource(R.string.advanced_debug_log_hint),
-                        checked = advanced.debugLog,
-                        divider = true,
-                    ) { viewModel.updateAdvanced(advanced.copy(debugLog = it)) }
-                    BrixNavRow(
-                        stringResource(R.string.advanced_debug_log_share),
-                        value = if (sessionLogs == 0) {
-                            stringResource(R.string.advanced_debug_log_none)
-                        } else {
-                            sessionLogs.toString()
-                        },
-                        divider = false,
-                        onClick = {
-                            val uri = app.brix.core.diagnostics.Diagnostics
-                                .exportLatestSessionLog(context) ?: return@BrixNavRow
-                            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                type = "text/csv"
-                                putExtra(android.content.Intent.EXTRA_STREAM, uri)
-                                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            context.startActivity(
-                                android.content.Intent.createChooser(
-                                    send,
-                                    context.getString(R.string.advanced_debug_log_share),
-                                ),
-                            )
-                        },
-                    )
                 }
             }
         }
@@ -916,7 +940,9 @@ fun StreamProfilesScreen(
         ) {
             BrixCard {
                 settings.streamProfiles.forEachIndexed { index, profile ->
-                    val a = profile.audio
+                    // Звук общий для всех профилей (AppSettings.audio); старое
+                    // поле профиля показывало то, чего стример уже не читает.
+                    val a = settings.audio
                     val audioMode = stringResource(
                         if (a.stereo) R.string.audio_stereo else R.string.audio_mono,
                     )
@@ -955,6 +981,46 @@ fun StreamProfilesScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.btn_add))
+            }
+            if (settings.twitch.loggedIn &&
+                app.brix.core.TwitchIntegration.SCOPE_STREAM_KEY in settings.twitch.grantedScopes
+            ) {
+                val scope = androidx.compose.runtime.rememberCoroutineScope()
+                var twitchResult by remember { mutableStateOf<Boolean?>(null) }
+                Spacer(Modifier.height(8.dp))
+                FilledTonalButton(
+                    onClick = { scope.launch { twitchResult = viewModel.addTwitchServer() } },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.twitch_add_server))
+                }
+                if (twitchResult == false) {
+                    Text(
+                        stringResource(R.string.twitch_server_failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            if (settings.kick.loggedIn &&
+                app.brix.core.KickIntegration.SCOPE_STREAM_KEY in settings.kick.grantedScopes
+            ) {
+                val kickScope = androidx.compose.runtime.rememberCoroutineScope()
+                var kickResult by remember { mutableStateOf<Boolean?>(null) }
+                Spacer(Modifier.height(8.dp))
+                FilledTonalButton(
+                    onClick = { kickScope.launch { kickResult = viewModel.addKickServer() } },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.kick_add_server))
+                }
+                if (kickResult == false) {
+                    Text(
+                        stringResource(R.string.twitch_server_failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
     }
@@ -1066,9 +1132,11 @@ fun DiagnosticsScreen(
     val settings by viewModel.settings.collectAsState()
     val scope = rememberCoroutineScope()
     var crashCount by remember { mutableStateOf(0) }
+    var sessionLogs by remember { mutableStateOf(0) }
     var exported by remember { mutableStateOf(false) }
     LaunchedEffect(settings) {
         crashCount = withContext(Dispatchers.IO) { CrashReporter.listReports(context).size }
+        sessionLogs = withContext(Dispatchers.IO) { Diagnostics.listSessionLogs(context).size }
     }
 
     Scaffold(
@@ -1093,6 +1161,44 @@ fun DiagnosticsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+            Spacer(Modifier.height(8.dp))
+            // Журнал сессии переехал сюда из «Расширенных» (владелец, 17.09): там он
+            // стоял рядом с «Записывать стрим», и перед замером обновления галки
+            // перепутались — эфир прошёл с записью MP4 и без журнала, замер пропал.
+            BrixCard {
+                BrixToggleRow(
+                    stringResource(R.string.advanced_debug_log),
+                    subtitle = stringResource(R.string.advanced_debug_log_hint),
+                    checked = settings.advanced.debugLog,
+                    divider = true,
+                ) { viewModel.updateAdvanced(settings.advanced.copy(debugLog = it)) }
+                BrixNavRow(
+                    stringResource(R.string.advanced_debug_log_share),
+                    value = if (sessionLogs == 0) {
+                        stringResource(R.string.advanced_debug_log_none)
+                    } else {
+                        sessionLogs.toString()
+                    },
+                    divider = false,
+                    onClick = {
+                        // Чтение каталога журналов — не на главном потоке, как
+                        // и экспорт диагностики ниже (H10, аудит 23.09).
+                        scope.launch(Dispatchers.IO) {
+                            val uri = Diagnostics.exportLatestSessionLog(context) ?: return@launch
+                            withContext(Dispatchers.Main) {
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/csv"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(send, context.getString(R.string.advanced_debug_log_share)),
+                                )
+                            }
+                        }
+                    },
+                )
             }
             Spacer(Modifier.height(8.dp))
             FilledTonalButton(
@@ -1373,6 +1479,21 @@ fun ChatSettingsScreen(
                 }
             }
 
+            // Эмодзи самих Twitch и Kick показываются всегда — они приходят в
+            // сообщении. 7TV и BTTV — отдельные сервисы, к ним ходим только
+            // по согласию: по запросам видно, какой канал открыт.
+            item { SettingsSectionHeader(stringResource(R.string.chat_emotes_section)) }
+            item {
+                BrixCard {
+                    BrixToggleRow(
+                        stringResource(R.string.chat_third_party_emotes),
+                        subtitle = stringResource(R.string.chat_third_party_emotes_hint),
+                        checked = chat.thirdPartyEmotes,
+                        divider = false,
+                    ) { viewModel.updateChat(chat.copy(thirdPartyEmotes = it)) }
+                }
+            }
+
             item { SettingsSectionHeader("VK Video Live") }
             item {
                 BrixCard {
@@ -1547,8 +1668,7 @@ fun ConfigTransferScreen(
                         Spacer(Modifier.width(8.dp))
                         FilledTonalButton(
                             onClick = {
-                                val config = app.brix.core.SettingsDeepLink.decode(linkText)
-                                    ?: app.brix.core.SettingsDeepLink.decodeMoblin(linkText)
+                                val config = app.brix.core.SettingsDeepLink.decodeAny(linkText.trim())
                                 if (config == null) {
                                     importError = true
                                 } else {
@@ -1650,8 +1770,13 @@ fun HudSettingsScreen(
                     BrixToggleRow(
                         stringResource(R.string.hud_version),
                         checked = hud.showVersion,
-                        divider = false,
+                        divider = true,
                     ) { viewModel.updateHud(hud.copy(showVersion = it)) }
+                    BrixToggleRow(
+                        stringResource(R.string.hud_audio_level),
+                        checked = hud.showAudioLevel,
+                        divider = false,
+                    ) { viewModel.updateHud(hud.copy(showAudioLevel = it)) }
                 }
             }
         }
@@ -2039,6 +2164,25 @@ fun WidgetEditScreen(
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
+                        // Сервис узнаётся по домену — человеку сразу видно, что
+                        // ссылку вставили ту и какую метку он увидит в HUD.
+                        if (kind == WidgetKind.DONATION_ALERT && url.isNotBlank()) {
+                            val service = app.brix.core.DonationService.forUrl(url)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = if (service == app.brix.core.DonationService.UNKNOWN) {
+                                    stringResource(R.string.overlay_service_unknown)
+                                } else {
+                                    stringResource(R.string.overlay_service_known, service.name.lowercase(), service.label)
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (service == app.brix.core.DonationService.UNKNOWN) {
+                                    MaterialTheme.colorScheme.tertiary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
                         if (kind == WidgetKind.WEB) {
                             Spacer(Modifier.height(12.dp))
                             OutlinedTextField(
@@ -2108,6 +2252,7 @@ fun WidgetEditScreen(
                     Spacer(Modifier.height(4.dp))
                     BrixToggleRow(
                         title = stringResource(R.string.overlay_audio_device),
+                        subtitle = stringResource(R.string.overlay_audio_device_hint),
                         checked = audioOnDevice,
                         divider = true,
                     ) {
@@ -2115,6 +2260,7 @@ fun WidgetEditScreen(
                     }
                     BrixToggleRow(
                         title = stringResource(R.string.overlay_audio_stream),
+                        subtitle = stringResource(R.string.overlay_audio_stream_hint),
                         checked = audioInStream,
                         divider = false,
                     ) {
@@ -2138,6 +2284,7 @@ fun WidgetEditScreen(
                         // не гибкость. Только «показывать или нет».
                         BrixToggleRow(
                             title = stringResource(R.string.overlay_caption_show),
+                            subtitle = stringResource(R.string.overlay_caption_show_hint),
                             checked = captionVisible,
                             divider = true,
                         ) { captionVisible = it }

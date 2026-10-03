@@ -62,6 +62,13 @@ class StreamService : Service() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /** Что сейчас показано в уведомлении: текст плюс то, от чего зависят
+     *  кнопки (подпись мьюта, кнопка остановки захвата экрана). */
+    private var lastNotifiedKey: String? = null
+
+    private fun notificationKey(text: String): String =
+        "$text|${StreamController.current()?.state?.value?.micMuted == true}|${ScreenCapture.isActive}"
     private var wakeLock: PowerManager.WakeLock? = null
 
     /**
@@ -153,6 +160,7 @@ class StreamService : Service() {
      */
     private fun startForegroundSafely(text: String) {
         val wasForeground = inForeground
+        lastNotifiedKey = notificationKey(text)
         runCatching { startForeground(NOTIF_ID, buildNotification(text), foregroundTypes()) }
             .onSuccess { inForeground = true }
             .onFailure {
@@ -200,7 +208,12 @@ class StreamService : Service() {
                         state.status == StreamStatus.Idle -> getString(R.string.notif_interrupted)
                         else -> getString(R.string.notif_streaming_title)
                     }
-                    notify(buildNotification(text))
+                    // Только при смене текста. Состояние меняется раз в секунду
+                    // (статистика) и до 5 раз/с при работе ABR, а видимый текст —
+                    // лишь при смене статуса. Раньше каждое обновление
+                    // пересобирало уведомление и шло binder-вызовом в
+                    // system_server — весь эфир (аудит 23.09).
+                    if (notificationKey(text) != lastNotifiedKey) notifyText(text)
                 // NEVER releaseAll() here: killing the streamer on an
                 // error destroys the camera mid-preview ("frozen frame"
                 // field bug) and poisons the next Start (released cached
@@ -217,7 +230,7 @@ class StreamService : Service() {
         // повторное объявление типов ничего не добавляет, зато из фона его
         // отвергают и служба рискует быть остановленной (см. inForeground).
         if (inForeground) {
-            notify(buildNotification(getString(R.string.notif_connecting)))
+            notifyText(getString(R.string.notif_connecting))
         } else {
             startForegroundSafely(getString(R.string.notif_connecting))
         }
@@ -260,18 +273,33 @@ class StreamService : Service() {
                 // encoder and zeroed activeGen, and the cached instance kept
                 // dropping every callback of the next session. Full resource
                 // teardown belongs to a dedicated Phase 3 mechanism.
-                current?.stop()
-                // Захват живёт ровно столько, сколько сеанс: иначе значок
-                // «идёт запись экрана» остался бы висеть после конца эфира, а
-                // система продолжала бы считать захват активным.
-                ScreenCapture.stop()
-                stopSelf()
+                // Остановка — не на главном потоке. Отправитель SRT ждёт
+                // SHUTDOWN до 500 мс в runBlocking, Moblink-сервер делает
+                // join без таймаута, а клиент SRTLA может ждать DNS под своим
+                // замком. Из интерфейса stop() давно уведён на IO; кнопка в
+                // уведомлении — основной способ остановить эфир с телефоном в
+                // кармане — оставалась на главном (аудит 23.09).
+                val target = current
+                scope.launch {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        runCatching { target?.stop() }
+                            .onFailure { android.util.Log.e("StreamService", "ACTION_STOP failed", it) }
+                    }
+                    // Захват живёт ровно столько, сколько сеанс: иначе значок
+                    // «идёт запись экрана» остался бы висеть после конца эфира, а
+                    // система продолжала бы считать захват активным.
+                    ScreenCapture.stop()
+                    stopSelf()
+                }
                 return START_NOT_STICKY
             }
             ACTION_RECONNECT -> {
-                current?.reconnect()
+                // Тоже не на главном потоке — см. ACTION_STOP.
+                current?.let { target ->
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { target.reconnect() } }
+                }
                 if (current == null) {
-                    notify(buildNotification(getString(R.string.notif_interrupted)))
+                    notifyText(getString(R.string.notif_interrupted))
                     stopSelf()
                 }
                 return START_NOT_STICKY
@@ -296,7 +324,7 @@ class StreamService : Service() {
                 ScreenCapture.notifyAllowed()
                 // Перерисовать: кнопка остановки захвата появляется только
                 // после того, как интерфейс отдал токен в ScreenCapture.
-                notify(buildNotification(getString(R.string.notif_streaming_title)))
+                notifyText(getString(R.string.notif_streaming_title))
                 return START_NOT_STICKY
             }
             ACTION_STOP_SCREEN -> {
@@ -307,7 +335,7 @@ class StreamService : Service() {
                 if (!ScreenCapture.stop()) {
                     Log.i("StreamService", "останавливать нечего: захват не идёт")
                 }
-                notify(buildNotification(getString(R.string.notif_streaming_title)))
+                notifyText(getString(R.string.notif_streaming_title))
                 return START_NOT_STICKY
             }
             ACTION_REVOKE_SCREEN -> {
@@ -322,14 +350,14 @@ class StreamService : Service() {
                 // целиком. Лишний тип без живого захвата безвреден — он
                 // проверяется в момент объявления, а не постоянно; уйдёт он
                 // при следующем честном подъёме службы.
-                notify(buildNotification(getString(R.string.notif_streaming_title)))
+                notifyText(getString(R.string.notif_streaming_title))
                 return START_NOT_STICKY
             }
             ACTION_MUTE -> {
                 if (current != null) {
                     current.setMuted(!current.state.value.micMuted)
                 } else {
-                    notify(buildNotification(getString(R.string.notif_interrupted)))
+                    notifyText(getString(R.string.notif_interrupted))
                     stopSelf()
                 }
                 return START_NOT_STICKY
@@ -339,7 +367,7 @@ class StreamService : Service() {
         // no session metadata to resume a stream, so a restarted service would
         // show a stale "live" notification with no actual stream.
         if (current == null) {
-            notify(buildNotification(getString(R.string.notif_interrupted)))
+            notifyText(getString(R.string.notif_interrupted))
             stopSelf()
         }
         return START_NOT_STICKY
@@ -451,6 +479,13 @@ class StreamService : Service() {
             mutePending,
         )
         return builder.build()
+    }
+
+    /** Все обновления текста идут через эту функцию, чтобы подписка на
+     *  состояние знала, что сейчас на экране, и не пересобирала его зря. */
+    private fun notifyText(text: String) {
+        lastNotifiedKey = notificationKey(text)
+        notify(buildNotification(text))
     }
 
     private fun notify(notification: Notification) {

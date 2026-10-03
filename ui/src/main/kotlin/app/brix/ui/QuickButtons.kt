@@ -75,6 +75,9 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -104,6 +107,11 @@ private const val GRID_ACTION_ROWS = 5
 private val STOP_HEIGHT = SMALL_H
 private const val LONG_PRESS_MS = 1500L
 private const val STOP_HOLD_MS = 700L
+private val STOP_RING_STROKE = 5.dp
+/** Кольцо прогресса рисуется ВНУТРИ кнопки: снаружи его срезает панель
+ *  быстрых кнопок (проверено на устройстве 20.09). Отступ от края — чтобы
+ *  скругление кольца не сливалось со скруглением фона. */
+private val STOP_RING_INSET = 2.dp
 
 private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTapWithLongPress(
     onTap: () -> Unit,
@@ -635,7 +643,9 @@ private fun StopButton(
     // brix-instream-buttons-v3: Stop = hold-to-confirm (700ms). A short tap
     // does nothing — the most expensive mistake in the app must be deliberate.
     var holding by remember { mutableStateOf(false) }
+    var pressed by remember { mutableStateOf(false) }
     val currentOnClick by rememberUpdatedState(onClick)
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     // Border progress: fills the button outline over the hold window so the
     // user sees exactly how much longer they must keep holding.
     val holdProgress = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
@@ -651,20 +661,38 @@ private fun StopButton(
         }
     }
     val confirming = streaming && holding
-    val bg = when {
+    val target = when {
         confirming -> MaterialTheme.colorScheme.error
         streaming -> liveColor()
         else -> MaterialTheme.colorScheme.primary
     }
-    val holdStroke = 3.dp
+    // Цвет вёлся мгновенным when, пока кольцо ехало 700 мс: в один кадр фон
+    // перекрашивался скачком, и переход читался как рывок (владелец, 20.09 —
+    // «анимация кривоватая»). Длительность вдвое короче удержания, чтобы цвет
+    // успел встать до того, как кольцо замкнётся.
+    val bg by animateColorAsState(targetValue = target, animationSpec = tween(220), label = "stopBg")
+    // Нажатие само по себе ничем не отзывалось — у соседних кнопок отклик есть,
+    // у самой важной не было.
+    val pressDim by animateColorAsState(
+        targetValue = if (pressed) Color.Black.copy(alpha = 0.18f) else Color.Transparent,
+        animationSpec = tween(90),
+        label = "stopPress",
+    )
     Box(
         modifier = modifier
             .then(sizeMod)
             .background(bg, RoundedCornerShape(10.dp))
             .drawBehind {
+                drawRoundRect(
+                    pressDim,
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(10.dp.toPx()),
+                )
                 if (!streaming) return@drawBehind
-                val strokePx = holdStroke.toPx()
-                val inset = strokePx / 2
+                // Кольцо внутри кнопки, но толще прежних 3 dp: снаружи его
+                // срезала панель (проверено на устройстве 20.09), а тонкое
+                // под пальцем не читалось.
+                val strokePx = STOP_RING_STROKE.toPx()
+                val inset = STOP_RING_INSET.toPx() + strokePx / 2
                 val radius = androidx.compose.ui.geometry.CornerRadius(10.dp.toPx() - inset)
                 val rect = androidx.compose.ui.geometry.RoundRect(
                     inset, inset,
@@ -672,35 +700,51 @@ private fun StopButton(
                     radius,
                 )
                 val path = androidx.compose.ui.graphics.Path().apply { addRoundRect(rect) }
-                val len = androidx.compose.ui.graphics.PathMeasure()
-                    .apply { setPath(path, false) }
-                    .length
-                // Dim base outline…
+                val measure = androidx.compose.ui.graphics.PathMeasure().apply { setPath(path, false) }
+                val len = measure.length
                 drawPath(
                     path,
-                    Color.White.copy(alpha = 0.35f),
+                    Color.White.copy(alpha = 0.3f),
                     style = androidx.compose.ui.graphics.drawscope.Stroke(strokePx),
                 )
-                // …then the progress segment running along the perimeter.
                 val p = holdProgress.floatValue
-                if (p > 0f) {
-                    drawPath(
-                        path,
-                        Color.White,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                            strokePx,
-                            pathEffect = androidx.compose.ui.graphics.PathEffect
-                                .dashPathEffect(floatArrayOf(len, len), len * (1f - p)),
-                        ),
-                    )
+                if (p <= 0f) return@drawBehind
+                // Отсчёт от середины нижней грани (владелец, 20.09): угол
+                // кнопки закрыт ладонью чаще, чем её низ. Точку ищем по самой
+                // кривой — у скруглённого прямоугольника доля периметра до
+                // нижней середины зависит от размеров кнопки.
+                val startAt = bottomCenterOffset(measure, len, size.width / 2f, size.height - inset)
+                val end = startAt + len * p
+                val segment = androidx.compose.ui.graphics.Path()
+                measure.getSegment(startAt, minOf(end, len), segment, true)
+                if (end > len) {
+                    val wrapped = androidx.compose.ui.graphics.Path()
+                    measure.getSegment(0f, end - len, wrapped, true)
+                    segment.addPath(wrapped)
                 }
+                drawPath(
+                    segment,
+                    Color.White,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(strokePx),
+                )
             }
             .pointerInput(streaming) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     val downPos = down.position
                     val startAt = android.os.SystemClock.elapsedRealtime()
-                    if (streaming) holding = true
+                    // Жест отменяется, когда меняется `streaming` (ключ
+                    // pointerInput): эфир оборвался посреди удержания. Без
+                    // finally кнопка оставалась затемнённой, а holding=true при
+                    // следующем эфире запускал кольцо без касания.
+                    try {
+                    pressed = true
+                    if (streaming) {
+                        holding = true
+                        // Отсчёт пошёл — это единственный сигнал, который виден
+                        // и когда экран не виден: на солнце, на бегу, в кармане.
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    }
                     var swiped = false
                     var liftedAt = 0L
                     val holdMs = if (streaming) STOP_HOLD_MS else LONG_PRESS_MS
@@ -723,6 +767,7 @@ private fun StopButton(
                         }
                     }
                     holding = false
+                    pressed = false
                     val heldMs = (if (liftedAt > 0) liftedAt else android.os.SystemClock.elapsedRealtime()) - startAt
                     val held = !swiped && heldMs >= holdMs
                     when {
@@ -731,20 +776,65 @@ private fun StopButton(
                         !streaming -> if (liftedAt > 0) currentOnClick()
                         else -> if (held) currentOnClick()
                     }
+                    if (streaming) {
+                        // Разный отклик на «сработало» и «отпустил раньше»:
+                        // иначе на ощупь эти два исхода неразличимы.
+                        haptic.performHapticFeedback(
+                            if (held && !swiped) {
+                                androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm
+                            } else {
+                                androidx.compose.ui.hapticfeedback.HapticFeedbackType.Reject
+                            },
+                        )
+                    }
+                    } finally {
+                        holding = false
+                        pressed = false
+                    }
                 }
             },
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = when {
-                confirming -> stringResource(R.string.btn_hold_stop)
-                streaming -> stringResource(R.string.btn_stop)
-                else -> stringResource(R.string.btn_start)
-            },
-            color = Color.White,
-            style = MaterialTheme.typography.titleMedium,
-        )
+        val label = when {
+            confirming -> stringResource(R.string.btn_hold_stop)
+            streaming -> stringResource(R.string.btn_stop)
+            else -> stringResource(R.string.btn_start)
+        }
+        // Раньше подпись переключалась скачком в тот же кадр, что и фон.
+        Crossfade(targetState = label, animationSpec = tween(160), label = "stopLabel") { text ->
+            Text(
+                text = text,
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
     }
+}
+
+/** Смещение по контуру до середины нижней грани: у скруглённого прямоугольника
+ *  оно зависит от сторон и радиуса, поэтому ищем по самой кривой, а не считаем
+ *  формулой. 96 проб — доли микросекунды, зато не зависит от того, с какого
+ *  угла Path начинает обход. */
+private fun bottomCenterOffset(
+    measure: androidx.compose.ui.graphics.PathMeasure,
+    length: Float,
+    x: Float,
+    y: Float,
+): Float {
+    var best = 0f
+    var bestDist = Float.MAX_VALUE
+    var i = 0
+    while (i < 96) {
+        val at = length * i / 96f
+        val pos = measure.getPosition(at)
+        val d = (pos.x - x) * (pos.x - x) + (pos.y - y) * (pos.y - y)
+        if (d < bestDist) {
+            bestDist = d
+            best = at
+        }
+        i++
+    }
+    return best
 }
 
 @Composable

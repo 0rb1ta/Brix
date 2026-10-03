@@ -1,12 +1,16 @@
 package app.brix.core.diagnostics
 
 import app.brix.core.AppSettings
+import app.brix.core.AudioSettings
+import app.brix.core.StreamProfile
 import app.brix.core.ChatSettings
+import app.brix.core.KickIntegration
 import app.brix.core.MoblinkSettings
 import app.brix.core.OverlayConfig
 import app.brix.core.Scene
 import app.brix.core.ServerProfile
 import app.brix.core.ServerType
+import app.brix.core.TwitchIntegration
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -50,6 +54,15 @@ class DiagnosticsRedactionTest {
         // Старое поле для миграции. Именно оно проехало мимо первой версии
         // вырезания: список `overlays` чистился, а этот дубль — нет.
         overlayUrl = "https://www.donationalerts.com/widget/alerts?token=SECRETWIDGET",
+        kick = KickIntegration(clientId = "SECRETKICKID", clientSecret = "SECRETKICKSECRET", refreshToken = "SECRETKICKREFRESH"),
+        twitch = TwitchIntegration(accessToken = "SECRETACCESS", refreshToken = "SECRETREFRESH", userId = "1", login = "SECRETLOGIN"),
+        // Имя гарнитуры бывает именем владельца («Dima's Buds»): и в общем
+        // звуке, и в устаревшем поле профиля (аудит 23.09).
+        audio = AudioSettings(micGain = 1.7f, micDeviceName = "SECRETHEADSET"),
+        streamProfiles = listOf(
+            @Suppress("DEPRECATION")
+            StreamProfile(id = "p", name = "p", audio = AudioSettings(micDeviceName = "SECRETLEGACYHEADSET")),
+        ),
     )
 
     @Test
@@ -66,6 +79,10 @@ class DiagnosticsRedactionTest {
         assertFalse("токен в старом поле overlayUrl", json.contains("SECRETWIDGET"))
         assertFalse("имя сцены", json.contains("SECRETSCENE"))
         assertFalse("путь к файлу заставки", json.contains("SECRETPATH"))
+        assertFalse("токены Twitch", json.contains("SECRETACCESS") || json.contains("SECRETREFRESH"))
+        assertFalse("ник Twitch", json.contains("SECRETLOGIN"))
+        assertFalse("ключи Kick", json.contains("SECRETKICK"))
+        assertFalse("имя гарнитуры", json.contains("SECRETHEADSET") || json.contains("SECRETLEGACYHEADSET"))
     }
 
     @Test

@@ -11,6 +11,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
 
+private const val DECODE_DEADLINE_MS = 15_000L
+
 /**
  * Decodes a donation alert audio file to raw 16-bit PCM and exposes it for the
  * two routing options:
@@ -149,8 +151,18 @@ class DonationAudioPlayer(
             val bufferInfo = MediaCodec.BufferInfo()
             var sawInputEos = false
             var sawOutputEos = false
+            // Предел по времени: на повреждённом файле декодер может так и не
+            // выставить конец потока, и цикл крутился бы вечно, занимая поток
+            // общего пула Dispatchers.Default (аудит 23.09). Декодирование
+            // идёт в разы быстрее реального времени — 15 с хватит с запасом
+            // и на длинную озвучку.
+            val deadline = android.os.SystemClock.elapsedRealtime() + DECODE_DEADLINE_MS
 
             while (!sawOutputEos) {
+                if (android.os.SystemClock.elapsedRealtime() > deadline) {
+                    android.util.Log.w("Overlay", "звук доната: декодер не дошёл до конца за ${DECODE_DEADLINE_MS} мс")
+                    break
+                }
                 if (!sawInputEos) {
                     val inIndex = codec.dequeueInputBuffer(10_000)
                     if (inIndex >= 0) {

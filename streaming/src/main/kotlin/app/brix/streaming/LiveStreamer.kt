@@ -38,6 +38,15 @@ interface LiveStreamer {
      * (`StatsReporter` в SRTLA, `UptimeTicker` в RTMP и WHIP).
      */
     val uptimeTick: StateFlow<Long>
+
+    /** Уровень микрофона по каналам, 0..1 — для индикатора на экране.
+     *  Отдельным потоком, как и тик часов: обновляется десятки раз в секунду
+     *  и не должен тащить за собой перерисовку всего экрана. */
+    val audioLevelLeft: StateFlow<Float>
+    val audioLevelRight: StateFlow<Float>
+
+    /** Вход перегружен: пик упёрся в потолок. */
+    val audioClipping: StateFlow<Boolean>
     val isStreaming: Boolean
 
     fun prepare(): Boolean
@@ -122,7 +131,11 @@ interface LiveStreamer {
     fun takeSnapshot(onResult: (android.graphics.Bitmap?) -> Unit)
     /** Report whether a donation overlay's widget is currently connected to
      *  its alert server, aggregated (any-connected) into [StreamState.donationWidgetConnected]. */
-    fun setOverlayConnectionState(overlayId: String, connected: Boolean)
+    fun setOverlayConnectionState(overlayId: String, serviceId: String, connected: Boolean)
+
+    /** Виджета больше нет на экране: убрать его метку из HUD совсем, иначе она
+     *  висит погашенной до перезапуска приложения. */
+    fun forgetOverlayConnection(overlayId: String)
     /** Show a persistent, manually-updated overlay (e.g. a live browser
      *  widget snapshot) — unlike [showOverlay] this has no built-in
      *  duration/fade; it stays until [detachLiveOverlay]. */

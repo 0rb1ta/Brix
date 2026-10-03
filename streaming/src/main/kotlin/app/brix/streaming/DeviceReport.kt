@@ -44,8 +44,8 @@ import org.json.JSONObject
 object DeviceReport {
 
     fun build(context: Context): JSONObject = JSONObject().apply {
-        // 2 — добавлен блок cameras.
-        put("schema", 2)
+        // 2 — добавлен блок cameras. 3 — все видеоэнкодеры и их пределы.
+        put("schema", 3)
         put("device", deviceInfo())
         put("encoders", encoders())
         put("cameras", cameras(context))
@@ -70,11 +70,13 @@ object DeviceReport {
      */
     private fun encoders(): JSONArray {
         val out = JSONArray()
-        val wanted = listOf("video/avc", "video/hevc", "video/av01")
+        // Все видеоэнкодеры, а не только те, которыми стримим: до 17.09 здесь был
+        // список avc/hevc/av01, и паспорт S21 не показал аппаратные VP8 и VP9,
+        // которые на телефоне есть (видно в /vendor/etc/media_codecs_c2.xml).
         runCatching {
             MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.forEach { info ->
                 if (!info.isEncoder) return@forEach
-                info.supportedTypes.filter { it.lowercase() in wanted }.forEach { mime ->
+                info.supportedTypes.filter { it.lowercase().startsWith("video/") }.forEach { mime ->
                     val caps = runCatching { info.getCapabilitiesForType(mime) }.getOrNull()
                     val enc = caps?.encoderCapabilities
                     out.put(
@@ -92,6 +94,20 @@ object DeviceReport {
                             put("cbr", enc?.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR))
                             put("vbr", enc?.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR))
                             put("cq", enc?.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CQ))
+                            caps?.videoCapabilities?.let { v ->
+                                put("maxSize", "${v.supportedWidths.upper}x${v.supportedHeights.upper}")
+                                put("maxBitrateKbps", v.bitrateRange.upper / 1000)
+                                put(
+                                    "fps1080p",
+                                    runCatching { v.getSupportedFrameRatesFor(1920, 1080).upper.toInt() }.getOrNull(),
+                                )
+                                put(
+                                    "measuredFps1080p",
+                                    runCatching {
+                                        v.getAchievableFrameRatesFor(1920, 1080)?.let { "${it.lower.toInt()}-${it.upper.toInt()}" }
+                                    }.getOrNull(),
+                                )
+                            }
                         },
                     )
                 }

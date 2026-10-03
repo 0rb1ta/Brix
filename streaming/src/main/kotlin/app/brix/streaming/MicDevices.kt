@@ -27,6 +27,15 @@ object MicDevices {
         // один пункт «Встроенный».
         AudioDeviceInfo.TYPE_BUILTIN_MIC -> builtinOf(device.address)
         AudioDeviceInfo.TYPE_WIRED_HEADSET -> MicSource.WIRED
+        // Bluetooth опознаётся, но канал SCO мы не поднимаем намеренно
+        // (решение 20.09, по разбору, не по замеру): пока гарнитура играет
+        // как наушники (A2DP), звук хороший, но запись с её микрофона
+        // переводит её в режим гарнитуры — двусторонний узкий канал, где
+        // портится и микрофон (8–16 кГц моно), и то, что слышно в наушниках.
+        // Ради эфира это невыгодный размен. Не «чинить» как недоделку.
+        // LE Audio (TYPE_BLE_HEADSET, API 31) — ОТДЕЛЬНЫЙ вопрос, который мы
+        // не обсуждали и не пробовали: LC3 работает в обе стороны без узкого
+        // режима, то есть довод против SCO к нему не относится. См. TODO.
         AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> MicSource.BLUETOOTH
         AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET -> MicSource.USB
         else -> null

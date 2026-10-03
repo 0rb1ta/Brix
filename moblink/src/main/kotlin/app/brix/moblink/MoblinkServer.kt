@@ -75,9 +75,14 @@ class MoblinkServer(
         send(conn, MessageToRelay.Hello(MOBLINK_API_VERSION, MoblinkAuthentication(state.challenge, state.salt)))
     }
 
+    /** Имя и причина приходят от собеседника: обрезаем и выкидываем
+     *  управляющие символы, иначе перевод строки в имени подделывал бы
+     *  соседние строки лога в выгрузке диагностики. */
+    private fun safe(raw: String): String = raw.take(30).filter { !it.isISOControl() }
+
     override fun onClose(conn: WebSocket, code: Int, reason: String, remote: Boolean) {
         val state = relays.remove(conn) ?: return
-        Log.i(TAG, "moblink: relay disconnected name=${state.name} code=$code reason=$reason")
+        Log.i(TAG, "moblink: relay disconnected name=${safe(state.name)} code=$code reason=${safe(reason)}")
         if (state.identified) {
             listener?.onRelayTunnelClosed(state.relayId)
             listener?.onRelayListChanged()
@@ -89,7 +94,9 @@ class MoblinkServer(
         when (val parsed = MessageToStreamer.fromJson(message)) {
             is MessageToStreamer.Identify -> handleIdentify(conn, state, parsed)
             is MessageToStreamer.Response -> handleResponse(conn, state, parsed)
-            null -> Log.w(TAG, "moblink: failed to parse message from ${state.name.ifEmpty { "?" }}: $message")
+            // Сам текст не пишем: до аутентификации его шлёт кто угодно из
+            // локальной сети, а тег Moblink уезжает в диагностику (аудит 23.09).
+            null -> Log.w(TAG, "moblink: failed to parse message from ${safe(state.name).ifEmpty { "?" }} len=${message.length}")
         }
     }
 
@@ -101,7 +108,7 @@ class MoblinkServer(
         val expected = MoblinkAuth.calculateAuthentication(password, state.salt, state.challenge)
         if (msg.authentication != expected) {
             send(conn, MessageToRelay.Identified(MoblinkResult.WrongPassword))
-            Log.w(TAG, "moblink: relay sent wrong password (name=${msg.name})")
+            Log.w(TAG, "moblink: relay sent wrong password (name=${safe(msg.name)})")
             conn.close(CLOSE_WRONG_PASSWORD, "wrong password")
             return
         }
@@ -124,14 +131,15 @@ class MoblinkServer(
     private fun handleResponse(conn: WebSocket, state: RelayState, msg: MessageToStreamer.Response) {
         if (!state.identified) return
         if (msg.result != MoblinkResult.Ok) {
-            Log.w(TAG, "moblink: ${state.name} request ${msg.id} failed: ${msg.result.wireName}")
+            Log.w(TAG, "moblink: ${safe(state.name)} request ${msg.id} failed: ${msg.result.wireName}")
             return
         }
         when (val data = msg.data) {
             is MoblinkResponseData.StartTunnel -> {
                 if (msg.id != state.pendingStartTunnelId) return
                 val host = conn.getRemoteSocketAddress()?.address?.hostAddress ?: return
-                Log.i(TAG, "moblink: tunnel ready ${state.name} -> $host:${data.port}")
+                // Без адреса туннеля: тег в белом списке диагностики.
+                Log.i(TAG, "moblink: tunnel ready ${safe(state.name)} port=${data.port}")
                 listener?.onRelayTunnelReady(state.relayId, state.name, host, data.port)
             }
             is MoblinkResponseData.Status -> {

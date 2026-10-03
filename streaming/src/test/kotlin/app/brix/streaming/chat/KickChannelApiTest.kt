@@ -22,4 +22,19 @@ class KickChannelApiTest {
         assertNull(parseKickChatroomInfo("not json"))
         assertNull(parseKickChatroomInfo("""{"chatroom":{}}"""))
     }
+
+    @Test
+    fun `user_id — отдельно от чатрума, его ждёт 7TV`() {
+        val info = parseKickChatroomInfo("""{"id":668,"user_id":676,"chatroom":{"id":668,"channel_id":668}}""")
+        assertEquals("676", info?.userId)
+        assertEquals("668", info?.chatroomId)
+    }
+
+    @Test
+    fun `зрители Kick — только когда эфир идёт`() {
+        val base = """"chatroom":{"id":1,"channel_id":1}"""
+        assertEquals(9929, parseKickViewers("""{$base,"livestream":{"viewer_count":9929,"is_live":true}}"""))
+        assertNull(parseKickViewers("""{$base,"livestream":null}"""))
+        assertNull(parseKickViewers("""{$base,"livestream":{"viewer_count":5,"is_live":false}}"""))
+    }
 }

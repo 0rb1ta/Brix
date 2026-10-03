@@ -63,6 +63,23 @@ class SrtSender(
     private val retransmitSequenceNumbers = LinkedHashSet<Long>()
     private var flowWindowOverflowCount = 0L
     private var rttUs = 0L
+
+    /**
+     * Последний номер полного ACK, на который уже ушёл ACKACK, и последний
+     * подтверждённый номер пакета. Сервер SRTLA рассылает каждый ACK по ВСЕМ
+     * линкам группы (PROTOCOL_SPEC §2), и мы обрабатывали каждую копию: N
+     * проходов removeIf по таблице и N ACKACK на один номер — ~90 лишних
+     * sendto в секунду на двух линках (аудит 23.09). Приёмнику дубль ACKACK
+     * не нужен: по номеру он его уже не найдёт.
+     */
+    private var lastAckAckNumber = -1L
+    private var lastAckedSn = -1L
+
+    /** Log.isLoggable — нативное чтение системного свойства; на каждый ACK
+     *  (~180/с с дублями) это заметно. Перечитываем раз в секунду, как уже
+     *  сделано в SrtlaConnection. */
+    private var verboseAcks = false
+    private var verboseCheckedAtUs = 0L
     private var latestReceivedPacketTime = 0L
     private var latestOutputPacketsTime = 0L
 
@@ -120,6 +137,8 @@ class SrtSender(
         conclusionSentEnteredTime = 0
         lastProvisionalRetransmitUs = 0
         rttUs = 0
+        lastAckAckNumber = -1L
+        lastAckedSn = -1L
         numberOfBytesSent = 0
         mbpsSendRate = 0.0
         setState(SrtSenderState.CONNECTING)
@@ -639,7 +658,11 @@ class SrtSender(
         if (packet.size < 20) return
         val lastAcknowledgedSequenceNumber = readUInt32(packet, 16)
         val before = packetsInFlight.size
-        removeAckedPackets(lastAcknowledgedSequenceNumber)
+        // Копия того же ACK с другого линка: подтверждать нечего нового.
+        if (lastAcknowledgedSequenceNumber != lastAckedSn) {
+            removeAckedPackets(lastAcknowledgedSequenceNumber)
+            lastAckedSn = lastAcknowledgedSequenceNumber
+        }
         val typeSpecificInformation = readUInt32(packet, 4)
         // Only a "full" ACK (typeSpecificInformation != 0) carries RTT/
         // bandwidth stats and feeds updateSendRate()/rttUs — if the receiver
@@ -652,7 +675,11 @@ class SrtSender(
         // текста и вызовом в системный лог. Замер 31.08 показал, что обработка
         // пакетов жжёт втрое больше процессора, чем сам энкод, — оставлять
         // такое в горячем пути нельзя. Под флагом диагностика доступна как была.
-        if (android.util.Log.isLoggable("Srtla", android.util.Log.VERBOSE)) {
+        if (now - verboseCheckedAtUs > 1_000_000L) {
+            verboseCheckedAtUs = now
+            verboseAcks = android.util.Log.isLoggable("Srtla", android.util.Log.VERBOSE)
+        }
+        if (verboseAcks) {
             android.util.Log.v(
                 "Srtla",
                 "srt-ack ackSn=$lastAcknowledgedSequenceNumber before=$before " +
@@ -661,6 +688,8 @@ class SrtSender(
         }
         if (typeSpecificInformation != 0L) {
             if (packet.size < 24) return
+            if (typeSpecificInformation == lastAckAckNumber) return
+            lastAckAckNumber = typeSpecificInformation
             rttUs = readUInt32(packet, 20)
             updateSendRate(now)
             val ackAck = createAckAckPacket(typeSpecificInformation)

@@ -70,6 +70,28 @@ class SrtSenderTest {
         assertEquals(1, h.controlPacketsOfType(Srt.PacketType.ACKACK.rawValue).size)
     }
 
+    /** Аудит 23.09: сервер SRTLA шлёт каждый ACK по всем линкам группы.
+     *  На копии того же номера второй ACKACK не нужен. */
+    @Test
+    fun `duplicate ack copies from other links get a single ackack`() {
+        val h = SrtSenderHarness()
+        h.connect()
+        h.setNextSequenceNumber(0)
+        h.enqueueAndSend(5)
+        h.clearOutput()
+
+        val ack = h.createAck(lastAckSn = 4L, rttUs = 30_000L)
+        h.sender.input(ack)
+        h.sender.input(ack)
+        h.sender.input(ack)
+
+        assertEquals(1, h.controlPacketsOfType(Srt.PacketType.ACKACK.rawValue).size)
+
+        h.enqueueAndSend(3)
+        h.sender.input(h.createAck(lastAckSn = 7L, rttUs = 30_000L))
+        assertEquals("a new ack number still gets its ackack", 2, h.controlPacketsOfType(Srt.PacketType.ACKACK.rawValue).size)
+    }
+
     @Test
     fun `nak schedules retransmission of the lost packet`() {
         val h = SrtSenderHarness()

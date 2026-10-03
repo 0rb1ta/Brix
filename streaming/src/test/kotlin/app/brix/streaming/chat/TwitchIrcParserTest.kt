@@ -93,4 +93,18 @@ class TwitchIrcParserTest {
             TwitchIrcParser.parse(":justinfan12345!justinfan12345@justinfan12345.tmi.twitch.tv JOIN #somechannel"),
         )
     }
+
+    @Test
+    fun `теги emotes и room-id доезжают до сообщения, ROOMSTATE даёт id канала`() {
+        val msg = TwitchIrcParser.parse(
+            "@color=#FF0000;display-name=Bob;emotes=25:0-2;room-id=71092938 " +
+                ":bob!bob@bob.tmi.twitch.tv PRIVMSG #xqc :LUL",
+        ) as TwitchIrcEvent.Privmsg
+        assertEquals("25:0-2", msg.emotesTag)
+        assertEquals("71092938", msg.roomId)
+        assertEquals(
+            TwitchIrcEvent.RoomState("71092938"),
+            TwitchIrcParser.parse("@emote-only=0;room-id=71092938 :tmi.twitch.tv ROOMSTATE #xqc"),
+        )
+    }
 }

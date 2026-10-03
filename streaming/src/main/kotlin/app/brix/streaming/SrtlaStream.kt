@@ -114,6 +114,12 @@ class SrtlaStream(
             connectChecker.onConnectionSuccess()
         }
         srtSender.onDisconnected = {
+            // Отправитель мёртв — перестаём переотправлять CONCLUSION. Иначе
+            // поздний ответ на него оживлял отправителя уже после того, как
+            // сессия ушла в Reconnecting, и onConnectionSuccess упирался в
+            // запрещённый переход Reconnecting -> Live (аудит 23.09).
+            handshakeJob?.cancel()
+            handshakeJob = null
             if (!teardownInProgress) {
                 connectChecker.onDisconnect()
             }
@@ -204,6 +210,9 @@ class SrtlaStream(
                 srtSender.retransmitConclusion()
             }
             if (isActive && !srtSender.isConnected()) {
+                // Провал уже объявлен — таймаут соединения не должен объявить
+                // его второй раз и забрать ещё одну ступень переподключения.
+                timeoutJob?.cancel()
                 connectChecker.onConnectionFailed("SRT handshake timeout")
             }
         }
@@ -303,6 +312,7 @@ class SrtlaStream(
         when (val source = audioSource) {
             is OverlayAudioSource -> source.setMicGain(micGain)
             is MicrophoneSource -> source.microphoneVolume = micGain
+            is com.pedro.encoder.input.sources.audio.MixAudioSource -> source.microphoneVolume = micGain
             else -> Unit
         }
     }
@@ -313,6 +323,9 @@ class SrtlaStream(
         when (val source = audioSource) {
             is OverlayAudioSource -> source.setMicMuted(micMuted)
             is MicrophoneSource -> if (micMuted) source.mute() else source.unMute()
+            // Сцена «микрофон + звук телефона»: mute() у неё глушит только
+            // микрофон. Раньше падала в else — голос шёл в эфир при «выкл».
+            is com.pedro.encoder.input.sources.audio.MixAudioSource -> if (micMuted) source.mute() else source.unMute()
             else -> Unit
         }
     }
@@ -358,11 +371,11 @@ class SrtlaStream(
     }
 
     override fun getVideoDataImp(videoBuffer: ByteBuffer, info: MediaCodec.BufferInfo) {
-        srtlaSender.sendMediaFrame(MediaFrame(videoBuffer.clone(), info.toMediaFrameInfo(), MediaFrame.Type.VIDEO))
+        srtlaSender.sendMediaFrame(videoBuffer, info.toMediaFrameInfo(), MediaFrame.Type.VIDEO)
     }
 
     override fun getAudioDataImp(audioBuffer: ByteBuffer, info: MediaCodec.BufferInfo) {
-        srtlaSender.sendMediaFrame(MediaFrame(audioBuffer.clone(), info.toMediaFrameInfo(), MediaFrame.Type.AUDIO))
+        srtlaSender.sendMediaFrame(audioBuffer, info.toMediaFrameInfo(), MediaFrame.Type.AUDIO)
     }
 
     override fun startStreamImp(endPoint: String) {
@@ -404,6 +417,11 @@ class SrtlaStream(
     }
 
     private fun startTransport(host: String, port: Int) {
+        // Задачи прошлой попытки гасим до новой: старый handshakeJob иначе
+        // досчитывал свои повторы CONCLUSION и объявлял провал уже новой
+        // попытке, если та регистрировалась дольше 3–4 с (аудит 23.09).
+        handshakeJob?.cancel()
+        handshakeJob = null
         teardownInProgress = true
         srtSender.stop()
         srtlaClient.stop()
@@ -430,6 +448,7 @@ class SrtlaStream(
                 srtSender.stop()
                 srtlaClient.stop()
                 teardownInProgress = false
+                handshakeJob?.cancel()
                 connectChecker.onConnectionFailed("SRTLA connection timeout")
             }
         }
@@ -450,7 +469,9 @@ class SrtlaStream(
                     )
                     adaptiveBitrate.update(stats)
                 }
-                delay(200)
+                // С выключенным ABR просыпаться 5 раз/с незачем. Секунда —
+                // столько максимум ждёт включение посреди эфира (аудит 23.09).
+                delay(if (adaptiveBitrateEnabled) 200 else 1000)
             }
         }
     }
@@ -520,6 +541,7 @@ private val noOpClient = object : StreamBaseClient() {
     override fun clearCache() = Unit
     override fun getCacheSize(): Int = 0
     override fun getItemsInCache(): Int = 0
+    override fun getQueueBytesOut(): Long = 0
     override fun getSentAudioFrames(): Long = 0
     override fun getSentVideoFrames(): Long = 0
     override fun getBytesSend(): Long = 0

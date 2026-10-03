@@ -7,7 +7,12 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-data class KickChatroomInfo(val chatroomId: String, val chatroomChannelId: String)
+data class KickChatroomInfo(
+    val chatroomId: String,
+    val chatroomChannelId: String,
+    /** Номер пользователя-владельца канала — его, а не чатрум, ждёт 7TV. */
+    val userId: String? = null,
+)
 
 /** Resolves a channel slug (`kick.com/<slug>`) to the numeric ids Pusher
  *  subscriptions need. Behind an interface for the same reason [ChatSocket]
@@ -20,7 +25,21 @@ fun interface KickChannelResolver {
 private data class KickChatroomDto(val id: Long, val channel_id: Long)
 
 @Serializable
-private data class KickChannelResponse(val chatroom: KickChatroomDto)
+private data class KickLivestreamDto(val viewer_count: Int = 0, val is_live: Boolean = false)
+
+@Serializable
+private data class KickChannelResponse(
+    val chatroom: KickChatroomDto,
+    val user_id: Long? = null,
+    val livestream: KickLivestreamDto? = null,
+)
+
+internal fun parseKickViewers(rawBody: String): Int? =
+    runCatching { json.decodeFromString<KickChannelResponse>(rawBody) }
+        .getOrNull()
+        ?.livestream
+        ?.takeIf { it.is_live }
+        ?.viewer_count
 
 private val json = Json { ignoreUnknownKeys = true }
 
@@ -29,7 +48,13 @@ private val json = Json { ignoreUnknownKeys = true }
 internal fun parseKickChatroomInfo(rawBody: String): KickChatroomInfo? =
     runCatching { json.decodeFromString<KickChannelResponse>(rawBody) }
         .getOrNull()
-        ?.let { KickChatroomInfo(it.chatroom.id.toString(), it.chatroom.channel_id.toString()) }
+        ?.let {
+            KickChatroomInfo(
+                chatroomId = it.chatroom.id.toString(),
+                chatroomChannelId = it.chatroom.channel_id.toString(),
+                userId = it.user_id?.toString(),
+            )
+        }
 
 /**
  * `kick.com/api/v1/channels/<slug>` sits behind Cloudflare, but — verified
@@ -38,10 +63,14 @@ internal fun parseKickChatroomInfo(rawBody: String): KickChatroomInfo? =
  * and cross-checked against Moblin's own iOS client, which sends no special
  * headers here either).
  */
-internal class OkHttpKickChannelResolver(
+class OkHttpKickChannelResolver(
     private val client: OkHttpClient = OkHttpClient(),
 ) : KickChannelResolver {
-    override suspend fun resolve(slug: String): KickChatroomInfo? = withContext(Dispatchers.IO) {
+    override suspend fun resolve(slug: String): KickChatroomInfo? = fetch(slug)?.let(::parseKickChatroomInfo)
+
+    suspend fun viewers(slug: String): Int? = fetch(slug)?.let(::parseKickViewers)
+
+    private suspend fun fetch(slug: String): String? = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
                 .url("https://kick.com/api/v1/channels/${slug.trim().lowercase()}")
@@ -54,7 +83,7 @@ internal class OkHttpKickChannelResolver(
                 .build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@use null
-                response.body?.string()?.let(::parseKickChatroomInfo)
+                response.body?.string()
             }
         }.getOrNull()
     }

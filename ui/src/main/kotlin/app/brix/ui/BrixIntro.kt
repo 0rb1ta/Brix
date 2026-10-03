@@ -24,6 +24,14 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Canvas
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
@@ -39,7 +47,6 @@ import kotlin.random.Random
 
 private val IntroBg = Color(0xFF0D0D0F)
 private val IntroAccent = Color(0xFFFFC257)
-private val IntroHeadText = Color(0xFFFFFFFF)
 private val IntroText = Color(0xFFF4F1EC)
 
 private val MatrixChars = listOf("^", "_", "•", "o", "x", ">", "<", "$", "?", "-", "*", "#")
@@ -53,6 +60,9 @@ private class RainColumn(
 
 private const val MAX_RAIN_COLUMNS = 60
 
+/** Самый длинный шаг времени за кадр, секунды: ~два кадра при 30 fps. */
+private const val MAX_FRAME_STEP = 1f / 15f
+
 @Composable
 fun BrixIntro(onFinished: () -> Unit) {
     val wordmark = "BRIX"
@@ -65,12 +75,17 @@ fun BrixIntro(onFinished: () -> Unit) {
     var time by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(Unit) {
-        // 1. Счетчик времени кадров
+        // 1. Счетчик времени кадров. Копим шаг, а не берём «сейчас минус старт»:
+        // первые кадры совпадают с холодным запуском (загрузка классов, чтение
+        // настроек), и один кадр в 200 мс при абсолютном времени переносил
+        // колонки скачком. С потолком шага дождь на таком кадре просто
+        // замедляется, а не прыгает.
         launch {
-            val start = withFrameNanos { it }
+            var last = withFrameNanos { it }
             while (true) {
                 val now = withFrameNanos { it }
-                time = (now - start) / 1_000_000_000f
+                time += ((now - last) / 1_000_000_000f).coerceAtMost(MAX_FRAME_STEP)
+                last = now
             }
         }
 
@@ -115,6 +130,23 @@ fun BrixIntro(onFinished: () -> Unit) {
     val layouts = remember(measurer, glyphStyle) {
         MatrixChars.map { measurer.measure(it, glyphStyle) }
     }
+    // Знаки растрируются один раз, белыми, а в кадре только копируются картинкой.
+    // drawText раскладывает абзац на каждом вызове, а вызовов в кадре сотни
+    // (колонки × хвост). Цвет хвоста — тонировкой той же картинки, голова —
+    // без неё, белая как есть.
+    val density = LocalDensity.current
+    val glyphImages = remember(layouts, density) {
+        layouts.map { layout ->
+            val w = layout.size.width.coerceAtLeast(1)
+            val h = layout.size.height.coerceAtLeast(1)
+            ImageBitmap(w, h).also { image ->
+                CanvasDrawScope().draw(density, LayoutDirection.Ltr, Canvas(image), Size(w.toFloat(), h.toFloat())) {
+                    drawText(layout, color = Color.White)
+                }
+            }
+        }
+    }
+    val tailTint = remember { ColorFilter.tint(IntroAccent) }
 
     val columns = remember {
         val rnd = Random(4242)
@@ -132,14 +164,21 @@ fun BrixIntro(onFinished: () -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(IntroBg)
-            .graphicsLayer { alpha = fade.value },
+            // ModulateAlpha: прозрачность применяется к каждой операции рисования,
+            // без внеэкранного буфера на весь экран. Он выделялся ровно на
+            // последние 300 мс — там, где заметен рывок в конце. Наложений,
+            // которым нужна честная групповая прозрачность, здесь нет.
+            .graphicsLayer {
+                alpha = fade.value
+                compositingStrategy = CompositingStrategy.ModulateAlpha
+            },
         contentAlignment = Alignment.Center,
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             if (rainAlpha.value <= 0f) return@Canvas
 
-            val charW = layouts.first().size.width.toFloat()
-            val charH = layouts.first().size.height.toFloat()
+            val charW = glyphImages.first().width.toFloat()
+            val charH = glyphImages.first().height.toFloat()
             val step = charW * 1.5f
             val cols = (size.width / step).toInt().coerceIn(10, MAX_RAIN_COLUMNS)
             val maxY = size.height + charH * 20
@@ -158,13 +197,12 @@ fun BrixIntro(onFinished: () -> Unit) {
                     val fadeK = 1f - (k / col.tail.toFloat())
                     val rawIndex = col.glyphs[(k + (headY / charH).toInt()) % col.glyphs.size]
                     val mutatingIndex = (rawIndex + glitchStep + k * 3 + i * 7).mod(MatrixChars.size)
-                    val layout = layouts[mutatingIndex]
 
-                    drawText(
-                        textLayoutResult = layout,
-                        color = if (k == 0) IntroHeadText else IntroAccent,
+                    drawImage(
+                        image = glyphImages[mutatingIndex],
                         topLeft = Offset(x, y),
                         alpha = (fadeK * fadeK * rainAlpha.value).coerceIn(0f, 1f),
+                        colorFilter = if (k == 0) null else tailTint,
                     )
                 }
             }

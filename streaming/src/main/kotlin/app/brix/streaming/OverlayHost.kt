@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Point
 import android.os.SystemClock
 import android.util.Log
+import app.brix.core.DonationService
 import app.brix.streaming.overlay.DonationAudioPlayer
 import app.brix.streaming.overlay.NativeOverlayRenderer
 import app.brix.streaming.overlay.OverlayAudioSource
@@ -44,6 +45,9 @@ internal class OverlayHost(
      *  подтверждать так же, как мьют, иначе включение звука донатов молча
      *  сбрасывало бы уровень на единицу. */
     private val micGain: () -> Float,
+    /** Общий измеритель уровня: миксер донат-звука должен кормить тот же
+     *  индикатор в HUD, что и обычный микрофон. */
+    private val micMeter: MicLevelMeter,
     private val scope: CoroutineScope,
     private val isReleased: () -> Boolean,
     private val updateState: ((StreamState) -> StreamState) -> Unit,
@@ -61,6 +65,10 @@ internal class OverlayHost(
                 if (micMuted()) source.mute() else source.unMute()
                 source.microphoneVolume = micGain()
             }
+            is com.pedro.encoder.input.sources.audio.MixAudioSource -> {
+                if (micMuted()) source.mute() else source.unMute()
+                source.microphoneVolume = micGain()
+            }
             else -> Unit
         }
     }
@@ -68,7 +76,7 @@ internal class OverlayHost(
     // На каждый id оверлея свой рендерер и своя анимационная задача, чтобы
     // алерт одного оверлея никогда не отменял и не затирал другой: GlInterface
     // у RootEncoder — настоящая цепочка фильтров (addFilter/removeFilter), так
-    // что несколько ImageObjectFilterRender живут одновременно.
+    // что несколько ImageFilterRender живут одновременно.
     private val renderers = ConcurrentHashMap<String, NativeOverlayRenderer>()
     private val jobs = ConcurrentHashMap<String, Job>()
 
@@ -83,6 +91,10 @@ internal class OverlayHost(
     // сворачивается в StreamState.donationWidgetConnected по «хоть один».
     private val connectionStates = ConcurrentHashMap<String, Boolean>()
 
+    /** overlayId → сервис (см. [app.brix.core.DonationService]): по нему HUD
+     *  показывает метку каждого сервиса отдельно, а не одну общую точку. */
+    private val overlayServices = ConcurrentHashMap<String, String>()
+
     fun setAudioInStream(overlayId: String, enabled: Boolean, donationPlayer: DonationAudioPlayer?) {
         if (isReleased()) return
         scope.launch {
@@ -93,7 +105,7 @@ internal class OverlayHost(
                     mixPlayers.remove(overlayId)
                 }
                 if (mixPlayers.isNotEmpty() && mixer == null) {
-                    val newMixer = OverlayAudioSource()
+                    val newMixer = OverlayAudioSource(meter = micMeter)
                     newMixer.startMixing()
                     stream.changeAudioSource(newMixer)
                     mixer = newMixer
@@ -104,7 +116,7 @@ internal class OverlayHost(
                     applyMicMute()
                 } else if (mixPlayers.isEmpty() && mixer != null) {
                     mixer = null
-                    stream.changeAudioSource(com.pedro.encoder.input.sources.audio.MicrophoneSource())
+                    stream.changeAudioSource(OverlayAudioSource(meter = micMeter))
                     applyMicMute()
                 }
                 mixer?.setDonationPlayers(mixPlayers.values.toSet())
@@ -165,7 +177,11 @@ internal class OverlayHost(
         jobs.remove(overlayId)?.cancel()
         val renderer = renderers[overlayId]
         scope.launch {
-            renderer?.detach(stream.getGlInterface())
+            // Снимаем фильтр, только если за это время не начался новый показ
+            // того же оверлея. show() берёт тот же рендерер, его attach() —
+            // пустая операция (фильтр ещё стоит), и запоздавший detach молча
+            // гасил только что показанный алерт (аудит 23.09).
+            if (!jobs.containsKey(overlayId)) renderer?.detach(stream.getGlInterface())
         }
         updateState { it.copy(overlayVisible = jobs.isNotEmpty()) }
     }
@@ -173,10 +189,31 @@ internal class OverlayHost(
     fun videoFrameSize(): Point? =
         if (isReleased()) null else runCatching { stream.getGlInterface().encoderSize }.getOrNull()
 
-    fun setConnectionState(overlayId: String, connected: Boolean) {
+    fun setConnectionState(overlayId: String, serviceId: String, connected: Boolean) {
         if (isReleased()) return
         connectionStates[overlayId] = connected
-        updateState { it.copy(donationWidgetConnected = connectionStates.values.any { v -> v }) }
+        overlayServices[overlayId] = serviceId
+        publishConnections()
+    }
+
+    /** Оверлей убран с экрана — забыть его совсем. */
+    fun forgetConnection(overlayId: String) {
+        if (isReleased()) return
+        connectionStates.remove(overlayId)
+        overlayServices.remove(overlayId)
+        publishConnections()
+    }
+
+    private fun publishConnections() {
+        val byService = connectionStates.entries
+            .groupBy({ overlayServices[it.key] ?: DonationService.UNKNOWN.id }, { it.value })
+            .mapValues { (_, states) -> states.any { it } }
+        updateState {
+            it.copy(
+                donationWidgetConnected = connectionStates.values.any { v -> v }.takeIf { connectionStates.isNotEmpty() },
+                donationServices = byService,
+            )
+        }
     }
 
     // Живые оверлеи (например снимок браузерного виджета) делят ту же карту
@@ -212,6 +249,7 @@ internal class OverlayHost(
         renderers.values.forEach { it.detach(stream.getGlInterface()) }
         renderers.clear()
         connectionStates.clear()
+        overlayServices.clear()
     }
 
     private fun alphaFor(elapsedMs: Float, totalMs: Long): Float {

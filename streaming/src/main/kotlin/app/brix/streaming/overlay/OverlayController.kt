@@ -50,7 +50,17 @@ class OverlayController(
     // dedicated instance keeps the two paths from colliding.
     private val lateAudioPlayer: DonationAudioPlayer = DonationAudioPlayer(),
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // Последняя страховка: любое необработанное исключение в алерте пишем в
+    // лог, а не роняем процесс вместе с эфиром.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+                android.util.Log.e("Overlay", "сбой показа алерта: ${e.javaClass.simpleName}: ${e.message}")
+            },
+    )
+
+    /** Номер последнего показанного алерта: таймер старого не гасит новый. */
+    private val showSeq = java.util.concurrent.atomic.AtomicLong(0)
 
     /** Audio options for a single alert. */
     data class AudioOptions(
@@ -103,8 +113,20 @@ class OverlayController(
     fun show(media: AlertMedia, audio: AudioOptions) {
         scope.launch {
             val imageFile = cache.getOrDownload(media.imageUrl, MediaType.IMAGE) ?: return@launch
-            val frames = gifDecoder.decode(imageFile, 0, 0)
+            // Битая или усечённая картинка: Glide бросает из get(), а эта
+            // корутина без обработчика — исключение роняло весь процесс
+            // посреди эфира (аудит 23.09). Картинку не показываем, эфир живёт.
+            val frames = try {
+                gifDecoder.decode(imageFile, 0, 0)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("Overlay", "картинка доната не декодировалась: ${e.javaClass.simpleName}")
+                imageFile.delete()
+                return@launch
+            }
             if (frames.isEmpty()) return@launch
+            val mySeq = showSeq.incrementAndGet()
 
             val size = OverlaySize(
                 widthFraction = media.width.coerceIn(0.05f, 1f),
@@ -221,7 +243,10 @@ class OverlayController(
                 audioJob.join()
             }
 
-            streamer.hideOverlay(overlayId)
+            // Гасим, только если за это время не пришёл следующий алерт. Раньше
+            // таймер первого безусловно снимал уже показанный второй — при
+            // частых донатах картинка гасла раньше своего срока (аудит 23.09).
+            if (showSeq.get() == mySeq) streamer.hideOverlay(overlayId)
         }
     }
 

@@ -81,4 +81,9 @@ class KickPusherParserTest {
             channels,
         )
     }
+
+    @Test
+    fun `pusher ping is recognised so the client can answer with pong`() {
+        assertEquals(KickPusherEvent.Ping, KickPusherParser.parse("""{"event":"pusher:ping","data":{}}"""))
+    }
 }

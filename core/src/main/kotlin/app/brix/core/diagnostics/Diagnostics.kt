@@ -107,10 +107,16 @@ object Diagnostics {
         // поле для миграции, а в нём токен виджета DonationAlerts. Здесь
         // каждое поле названо явно, поэтому новое поле модели по умолчанию
         // в отчёт НЕ попадает, и цена ошибки — «чего-то не хватает».
+        // Устаревший звук профиля обнуляем: kotlinx умолчания не пишет, и поле
+        // с именем гарнитуры в отчёт не попадает (аудит 23.09).
+        @Suppress("DEPRECATION")
+        val profilesWithoutLegacyAudio = settings.streamProfiles.map { it.copy(audio = app.brix.core.AudioSettings()) }
         val safe = AppSettings(
-            // Видео, звук и ABR живут в StreamProfile, а не здесь — они едут
-            // в составе streamProfiles ниже. Полe AppSettings.audio помечено
-            // @Deprecated и оставлено только для миграции, поэтому не берём.
+            // Звук с 16.09 общий — AppSettings.audio, а в StreamProfile.audio
+            // осталось устаревшее поле для миграции (запись здесь раньше
+            // утверждала обратное). Общий звук берём без имени устройства:
+            // в нём бывает имя владельца гарнитуры («Dima's Buds»).
+            audio = settings.audio.copy(micDeviceName = ""),
             cameraDefaults = settings.cameraDefaults,
             appearance = settings.appearance,
             advanced = settings.advanced,
@@ -118,7 +124,7 @@ object Diagnostics {
             quickButtons = settings.quickButtons,
             selectedStreamProfileId = settings.selectedStreamProfileId,
             selectedSceneId = settings.selectedSceneId,
-            streamProfiles = settings.streamProfiles,
+            streamProfiles = profilesWithoutLegacyAudio,
             customPresets = settings.customPresets,
             // Оставляем то, от чего зависит транспорт: тип, задержка,
             // принудительный IPv4, включён ли профиль. Адрес и ключ — нет.

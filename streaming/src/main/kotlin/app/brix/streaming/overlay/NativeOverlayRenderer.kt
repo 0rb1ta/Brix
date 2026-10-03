@@ -1,17 +1,17 @@
 package app.brix.streaming.overlay
 
 import android.graphics.Bitmap
-import com.pedro.encoder.input.gl.render.filters.`object`.ImageObjectFilterRender
+import com.pedro.encoder.input.gl.render.filters.`object`.ImageFilterRender
 import com.pedro.library.view.GlInterface
 
 /**
- * Renders an in-stream overlay natively: an [ImageObjectFilterRender] is added
+ * Renders an in-stream overlay natively: an [ImageFilterRender] is added
  * to the stream's GL pipeline and its bitmap is updated per frame. `setImage`
  * is safe to call from any thread (the texture is uploaded on the GL thread
  * during the filter's draw pass).
  */
 class NativeOverlayRenderer {
-    private val filter = ImageObjectFilterRender()
+    private val filter = ImageFilterRender()
     @Volatile
     private var applied = false
 
@@ -45,7 +45,7 @@ class NativeOverlayRenderer {
     }
 
     fun setAlpha(alpha: Float) {
-        filter.setAlpha(alpha.coerceIn(0f, 1f))
+        filter.alpha = alpha.coerceIn(0f, 1f)
     }
 
     /**

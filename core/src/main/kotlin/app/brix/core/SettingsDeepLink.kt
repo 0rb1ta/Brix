@@ -94,8 +94,12 @@ object SettingsDeepLink {
      *  переносишь настройки на своё же второе устройство.
      */
     fun encode(settings: AppSettings, includeSecrets: Boolean = false): String {
+        // Без устаревшего звука профиля: в нём имя гарнитуры, а на другом
+        // телефоне он бы ещё и перебил общий звук при миграции.
+        @Suppress("DEPRECATION")
+        val profiles = settings.streamProfiles.map { it.copy(audio = AudioSettings()) }
         val shared = SharedConfig(
-            streamProfiles = settings.streamProfiles,
+            streamProfiles = profiles,
             serverProfiles = if (includeSecrets) {
                 settings.serverProfiles
             } else {
@@ -115,7 +119,13 @@ object SettingsDeepLink {
         if (!uri.startsWith("$SCHEME://")) return null
         val payload = queryParam(uri, PARAM) ?: return null
         return try {
-            json.decodeFromString<SharedConfig>(payload)
+            // Ссылка от старой версии может нести звук в профиле. Импорт его
+            // отбрасывает: иначе при следующей загрузке миграция молча
+            // подставила бы чужой звук в общие настройки (аудит 23.09).
+            @Suppress("DEPRECATION")
+            json.decodeFromString<SharedConfig>(payload).let { c ->
+                c.copy(streamProfiles = c.streamProfiles.map { it.copy(audio = AudioSettings()) })
+            }
         } catch (_: Exception) {
             null
         }
@@ -175,6 +185,99 @@ object SettingsDeepLink {
                 )
             }
             if (serverProfiles.isEmpty()) null else SharedConfig(streamProfiles, serverProfiles)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Любая понятная нам ссылка: своя, Moblin или Larix (её же отдаёт IRL Pro). */
+    fun decodeAny(uri: String): SharedConfig? =
+        decode(uri) ?: decodeMoblin(uri) ?: decodeLarix(uri)
+
+    /**
+     * Импорт ссылки Larix Grove — `larix://set/v1?conn[][url]=…&enc[vid][res]=…`.
+     *
+     * Этим форматом отдаёт настройки не только Larix, но и IRL Pro (владелец,
+     * 16.09), поэтому его стоит понимать. Формат открытый:
+     * https://softvelum.com/larix/grove/ — соединения массивом `conn[]`,
+     * кодер одним блоком `enc[vid]`/`enc[aud]`, битрейты в кбит/с.
+     *
+     * Как и у Moblin — в одну сторону и с потерями. Берём только то, чему есть
+     * пара у нас: адрес, имя, `srtstreamid`, `srtlatency`, кодер. Пропускаем
+     * RTMP-логин (`user`/`pass`) и пароль SRT (`srtpass`) — шифрования SRT у нас
+     * нет сознательно (см. TODO), а RTMP-логина нет в модели. Соединения с
+     * непонятной нам схемой (RIST, WebRTC) тоже пропускаются, а не ломают импорт.
+     */
+    fun decodeLarix(uri: String): SharedConfig? {
+        if (!uri.startsWith("larix://")) return null
+        val query = uri.substringAfter('?', missingDelimiterValue = "")
+        if (query.isEmpty()) return null
+        return try {
+            val connections = mutableListOf<MutableMap<String, String>>()
+            val encoder = mutableMapOf<String, String>()
+            for (pair in query.split('&')) {
+                val idx = pair.indexOf('=')
+                if (idx < 0) continue
+                // Скобки в ключе бывают и как есть, и закодированными (%5B%5D).
+                val key = URLDecoder.decode(pair.substring(0, idx), "UTF-8")
+                val value = URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
+                when {
+                    key.startsWith("conn[][") -> {
+                        val field = key.removePrefix("conn[][").removeSuffix("]")
+                        // `conn[]` — массив без индексов: новое соединение
+                        // начинается, когда поле в текущем уже встречалось.
+                        val current = connections.lastOrNull()
+                        if (current == null || field in current) {
+                            connections += mutableMapOf(field to value)
+                        } else {
+                            current[field] = value
+                        }
+                    }
+                    key.startsWith("enc[") -> encoder[key] = value
+                }
+            }
+            val servers = connections.mapNotNull { c ->
+                val url = c["url"]?.trim().orEmpty()
+                val type = when {
+                    url.startsWith("srt://") || url.startsWith("srtla://") -> ServerType.SRTLA
+                    url.startsWith("rtmp://") || url.startsWith("rtmps://") -> ServerType.RTMP
+                    else -> return@mapNotNull null
+                }
+                ServerProfile(
+                    id = Ids.newId(),
+                    name = c["name"]?.takeIf { it.isNotBlank() }
+                        ?: url.substringAfter("://").substringBefore('/').substringBefore(':'),
+                    type = type,
+                    baseUrl = url,
+                    streamId = if (type == ServerType.SRTLA) c["srtstreamid"].orEmpty() else "",
+                    latencyMs = c["srtlatency"]?.toIntOrNull() ?: 2000,
+                    enabled = c["active"] != "off",
+                )
+            }
+            if (servers.isEmpty()) return null
+            val profiles = if (encoder.isEmpty()) {
+                emptyList()
+            } else {
+                val defaults = VideoSettings()
+                val res = encoder["enc[vid][res]"]?.split('x', 'X')?.mapNotNull { it.trim().toIntOrNull() }
+                listOf(
+                    StreamProfile(
+                        id = Ids.newId(),
+                        name = "Larix",
+                        video = VideoSettings(
+                            width = res?.getOrNull(0) ?: defaults.width,
+                            height = res?.getOrNull(1) ?: defaults.height,
+                            fps = encoder["enc[vid][fps]"]?.toDoubleOrNull()?.toInt() ?: defaults.fps,
+                            bitrateKbps = encoder["enc[vid][bitrate]"]?.toIntOrNull() ?: defaults.bitrateKbps,
+                            codec = if (encoder["enc[vid][format]"] == "hevc") Codec.HEVC else Codec.H264,
+                        ),
+                        audio = AudioSettings(
+                            bitrateKbps = encoder["enc[aud][bitrate]"]?.toIntOrNull() ?: AudioSettings().bitrateKbps,
+                        ),
+                    ),
+                )
+            }
+            SharedConfig(streamProfiles = profiles, serverProfiles = servers)
         } catch (_: Exception) {
             null
         }

@@ -224,6 +224,27 @@ class SettingsSerializationTest {
         assertEquals(192, already.migrate().audio.bitrateKbps)
     }
 
+    /** Аудит 23.09: условие «общие равны умолчанию» срабатывало снова после
+     *  сброса звука, и миграция тянула старое поле профиля. Теперь источник
+     *  после переноса обнуляется. */
+    @Test
+    fun `после миграции звук профиля обнулён и сброс общего звука её не повторяет`() {
+        @Suppress("DEPRECATION")
+        val old = AppSettings(
+            selectedStreamProfileId = "p1",
+            streamProfiles = listOf(
+                StreamProfile(id = "p1", name = "первый", audio = AudioSettings(bitrateKbps = 64, micDeviceName = "Dima's Buds")),
+            ),
+        )
+        val migrated = old.migrate()
+        assertEquals(64, migrated.audio.bitrateKbps)
+        @Suppress("DEPRECATION")
+        assertEquals(AudioSettings(), migrated.streamProfiles.single().audio)
+
+        val reset = migrated.copy(audio = AudioSettings()).migrate()
+        assertEquals("сброс к умолчанию не должен воскрешать старое поле", AudioSettings(), reset.audio)
+    }
+
     // --- Сцены ---
     //
     // Модель Scene лежала в коде и не читалась никем. Теперь она решает, что в

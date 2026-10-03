@@ -39,6 +39,38 @@ class FakeSrtlaRecTest {
         }
     }
 
+    /**
+     * Стенд 04.10, сценарий `wifi`: после возврата Wi-Fi первым в списке
+     * оказалась сота, которая до приёмника не достаёт. Клиент слал пробу только
+     * через первый подключившийся линк и отсекал остальные — бондинг не
+     * поднимался, хотя Wi-Fi работал. В поле это оператор, режущий UDP. Moblin
+     * пробует каждым подключившимся линком; побеждает первый ответивший.
+     */
+    @Test
+    fun `registration succeeds through a later link when the first one is dead`() {
+        val fake = FakeSrtlaRec()
+        fake.start()
+        // «Глухая» точка: тот же порт на другом адресе петли, сокет открыт, но
+        // никто не отвечает — как сота, у которой оператор режет UDP.
+        val deaf = java.net.DatagramSocket(fake.port, java.net.InetAddress.getByName("127.0.0.2"))
+        try {
+            val ready = CountDownLatch(1)
+            val client = newClient { ready.countDown() }
+            client.addConnection("cellular", 1f, resolve = { java.net.InetAddress.getByName("127.0.0.2") })
+            client.addConnection("wifi", 1f, resolve = { java.net.InetAddress.getByName("127.0.0.1") })
+            client.start("127.0.0.1", fake.port)
+
+            assertTrue(
+                "клиент обязан зарегистрироваться через живой второй линк",
+                ready.await(5, TimeUnit.SECONDS),
+            )
+            client.stop()
+        } finally {
+            deaf.close()
+            fake.stop()
+        }
+    }
+
     @Test
     fun `one-way-deaf first port recovers via socket bounce`() {
         // Swallow REG3 for the first 6 attempts (2 retries x 2s patience +
